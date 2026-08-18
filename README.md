@@ -92,23 +92,23 @@ Visit our [Releases Page](https://github.com/deepseek-ai/deepseek-harness-app/re
 
 **Windows:**
 ```
-deepseek-harness-app_1.0.2_x64_en-US.msi
+deepseek-harness-app_1.0.3_x64_en-US.msi
 ```
 
 **macOS:**
 ```
-DeepSeek.Harness.App_1.0.2_universal.dmg
+DeepSeek.Harness.App_1.0.3_universal.dmg
 ```
 
 **Linux (Debian/Ubuntu):**
 ```bash
-sudo dpkg -i deepseek-harness-app_1.0.2_amd64.deb
+sudo dpkg -i deepseek-harness-app_1.0.3_amd64.deb
 ```
 
 **Linux (AppImage):**
 ```bash
-chmod +x deepseek-harness-app_1.0.2_amd64.AppImage
-./deepseek-harness-app_1.0.2_amd64.AppImage
+chmod +x deepseek-harness-app_1.0.3_amd64.AppImage
+./deepseek-harness-app_1.0.3_amd64.AppImage
 ```
 
 ### First Launch

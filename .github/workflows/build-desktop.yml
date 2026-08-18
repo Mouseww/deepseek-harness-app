@@ -46,6 +46,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      - name: Validate Tauri plugin config
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib tauri_shell_plugin_config_is_v2_compatible
+
       - name: Build Tauri app
         if: matrix.platform != 'macos-latest'
         run: pnpm tauri build

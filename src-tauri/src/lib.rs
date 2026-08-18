@@ -204,6 +204,15 @@ async fn check_app_updates(_app: AppHandle) -> Result<bool, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = try_run() {
+        let message = format!("DeepSeek Harness failed to start:\n{error}");
+        eprintln!("{message}");
+        show_fatal_error("DeepSeek Harness App", &message);
+        std::process::exit(1);
+    }
+}
+
+fn try_run() -> tauri::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
@@ -229,5 +238,74 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+}
+
+fn show_fatal_error(title: &str, message: &str) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+
+        fn wide(value: &str) -> Vec<u16> {
+            std::ffi::OsStr::new(value)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect()
+        }
+
+        const MB_ICONERROR: u32 = 0x00000010;
+        extern "system" {
+            fn MessageBoxW(
+                hwnd: *mut core::ffi::c_void,
+                text: *const u16,
+                caption: *const u16,
+                ty: u32,
+            ) -> i32;
+        }
+
+        let text = wide(message);
+        let caption = wide(title);
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                caption.as_ptr(),
+                MB_ICONERROR,
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (title, message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserialize;
+
+    /// Mirrors `tauri-plugin-shell` 2.x `Config` (`deny_unknown_fields`).
+    /// The 1.0.0 MSI exited immediately because `plugins.shell.scope` is a
+    /// Tauri 1 field that this struct rejects at plugin init.
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ShellPluginConfig {
+        #[serde(default)]
+        #[allow(dead_code)]
+        open: serde_json::Value,
+    }
+
+    #[test]
+    fn tauri_shell_plugin_config_is_v2_compatible() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let shell = conf
+            .pointer("/plugins/shell")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+
+        serde_json::from_value::<ShellPluginConfig>(shell).expect(
+            "plugins.shell must match Tauri 2 (only `open`; no Tauri 1 `scope`)",
+        );
+    }
 }

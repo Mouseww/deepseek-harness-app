@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-08-18
+
+### Fixed
+- Windows installers no longer exit immediately on launch. Tauri 2 rejects the old `plugins.shell.scope` field, which made the 1.0.0 MSI panic with exit code 101 before a window appeared.
+- Startup failures now show a Windows error dialog instead of exiting silently.
+- Desktop CI now validates the Tauri 2 shell plugin config before packaging.
+
 ## [1.0.2] - 2026-08-18
 
 ### Changed
@@ -47,7 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - macOS 10.14+ (Intel) / macOS 11+ (Apple Silicon) - universal DMG
 - Linux (Ubuntu 22.04+, Debian) - DEB & AppImage
 
-[Unreleased]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/deepseek-ai/deepseek-harness-app/releases/tag/v1.0.0
