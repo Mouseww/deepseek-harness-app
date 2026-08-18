@@ -106,6 +106,8 @@ jobs:
     needs: [build-android, build-ios]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/mobile-v')
+    permissions:
+      contents: write
 
     steps:
       - name: Download all artifacts
@@ -114,7 +116,7 @@ jobs:
           path: artifacts
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/android-apk/*

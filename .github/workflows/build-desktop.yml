@@ -32,6 +32,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Add macOS Rust targets
+        if: matrix.platform == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       - name: Install dependencies (Ubuntu)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -43,7 +47,14 @@ jobs:
         run: pnpm install
 
       - name: Build Tauri app
+        if: matrix.platform != 'macos-latest'
         run: pnpm tauri build
+
+      - name: Build Tauri app (macOS universal, 10.14+)
+        if: matrix.platform == 'macos-latest'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.14"
+        run: pnpm tauri build --target universal-apple-darwin
 
       - name: Upload Windows NSIS installer
         if: matrix.platform == 'windows-latest'
@@ -64,7 +75,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
-          path: src-tauri/target/release/bundle/dmg/*.dmg
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
 
       - name: Upload Linux DEB
         if: matrix.platform == 'ubuntu-22.04'
@@ -84,6 +95,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
 
     steps:
       - name: Download all artifacts
@@ -92,7 +105,7 @@ jobs:
           path: artifacts
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/windows-nsis/*
@@ -102,5 +115,6 @@ jobs:
             artifacts/linux-appimage/*
           draft: false
           prerelease: false
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
