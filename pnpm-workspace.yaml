@@ -1,4 +1,6 @@
-# pnpm 10+ blocks dependency lifecycle scripts unless allowlisted.
-# Vite needs esbuild's postinstall to unpack the platform binary.
+packages:
+  - '.'
+
 allowBuilds:
   esbuild: true
+  '@tauri-apps/cli': true

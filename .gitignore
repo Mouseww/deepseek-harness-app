@@ -1,42 +1,13 @@
-# Build outputs
 dist/
-lib/
-target/
-src-tauri/target/
-
-# Dependencies
 node_modules/
 .pnpm-store/
-
-# Logs
 *.log
-npm-debug.log*
-pnpm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Environment variables
 .env
-.env.local
-.env.*.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
 .DS_Store
 Thumbs.db
-Desktop.ini
-
-# Tauri
+.vscode/
+.idea/
+src-tauri/target/
 src-tauri/gen/
-src-tauri/Cargo.lock
-
-# Package managers
-pnpm-lock.yaml
-yarn.lock
-package-lock.json
+src-tauri/WixTools/
+*.pdb

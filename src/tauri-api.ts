@@ -1,75 +1,103 @@
 /**
- * DSH Desktop - Tauri IPC 接口
- * 提供前端与 Rust 后端通信的 TypeScript 类型定义
+ * Typed wrappers around the Tauri commands the shell page calls.
+ * @module @deepseek-ai/dsh-desktop/tauri-api
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { DshDesktopConfig } from './config.ts'
 
-export interface DshConfig {
-  host: string
-  port: number
-  auto_start: boolean
-}
+/** Backend process and navigation state. */
+export type BackendState = 'idle' | 'installing' | 'starting' | 'ready' | 'updating' | 'error'
 
-export class DshBackendClient {
-  /**
-   * 启动 DSH 后端进程
-   * @param config DSH 配置
-   * @returns 实际监听的端口
-   */
-  static async start(config: DshConfig): Promise<number> {
-    return await invoke<number>('start_dsh_backend', { config })
-  }
-
-  /**
-   * 停止 DSH 后端进程
-   */
-  static async stop(): Promise<void> {
-    await invoke('stop_dsh_backend')
-  }
-
-  /**
-   * 获取 DSH 后端运行状态
-   * @returns true 表示正在运行
-   */
-  static async getStatus(): Promise<boolean> {
-    return await invoke<boolean>('get_dsh_status')
-  }
-
-  /**
-   * 获取 DSH 当前监听端口
-   * @returns 端口号，如果未运行则返回 null
-   */
-  static async getPort(): Promise<number | null> {
-    return await invoke<number | null>('get_dsh_port')
-  }
-
-  /**
-   * 获取配置
-   */
-  static async getConfig(): Promise<DshConfig> {
-    return await invoke<DshConfig>('get_config')
-  }
-
-  /**
-   * 保存配置
-   */
-  static async setConfig(config: DshConfig): Promise<void> {
-    await invoke('set_config', { config })
-  }
-
-  /**
-   * 检查更新
-   * @returns true 表示有新版本可用
-   */
-  static async checkUpdates(): Promise<boolean> {
-    return await invoke<boolean>('check_app_updates')
-  }
+/** Snapshot the Rust backend emits and returns from get_status. */
+export interface BackendStatus {
+  state: BackendState
+  url?: string
+  message?: string
+  config: DshDesktopConfig
+  installedVersion?: string
+  latestVersion?: string
+  canLaunchLocal: boolean
+  platform: string
 }
 
 /**
- * 检测是否在 Tauri 环境中运行
+ * Load the persisted config plus live backend status.
+ * @returns the current snapshot.
  */
-export function isTauriEnvironment(): boolean {
-  return '__TAURI_INTERNALS__' in window
+export async function getStatus(): Promise<BackendStatus> {
+  return invoke<BackendStatus>('get_status')
+}
+
+/**
+ * Persist a validated config. Does not start or stop the backend.
+ * @param config - normalized settings.
+ * @returns the stored config.
+ */
+export async function setConfig(config: DshDesktopConfig): Promise<DshDesktopConfig> {
+  return invoke<DshDesktopConfig>('set_config', { config })
+}
+
+/**
+ * Start or connect according to the stored launch mode.
+ * @returns the status after the command is accepted.
+ */
+export async function startBackend(): Promise<BackendStatus> {
+  return invoke<BackendStatus>('start_dsh')
+}
+
+/**
+ * Stop a locally spawned `dsh web` process. Connect mode is a no-op.
+ * @returns the status after stop.
+ */
+export async function stopBackend(): Promise<BackendStatus> {
+  return invoke<BackendStatus>('stop_dsh')
+}
+
+/**
+ * Navigate the current WebView to the ready DSH URL.
+ */
+export async function openWeb(): Promise<void> {
+  await invoke('open_web')
+}
+
+/**
+ * Navigate the current WebView back to the shell settings page.
+ */
+export async function openSettings(): Promise<void> {
+  await invoke('open_settings')
+}
+
+/**
+ * Compare the managed DSH install with the npm registry.
+ * @returns current and latest versions when they can be read.
+ */
+export async function checkDshUpdates(): Promise<{ installed?: string; latest?: string }> {
+  return invoke('check_dsh_updates')
+}
+
+/**
+ * Install or upgrade `@deepseek-ai/dsh` in the app-data runtime prefix.
+ */
+export async function updateDsh(): Promise<BackendStatus> {
+  return invoke<BackendStatus>('update_dsh')
+}
+
+/**
+ * Subscribe to live backend status events.
+ * @param handler - called with each snapshot.
+ * @returns an unlisten function.
+ */
+export async function onStatus(handler: (status: BackendStatus) => void): Promise<UnlistenFn> {
+  return listen<BackendStatus>('dsh-status', (event) => { handler(event.payload) })
+}
+
+/**
+ * Subscribe to installer/updater stdout lines.
+ * @param handler - called with each line.
+ * @returns an unlisten function.
+ */
+export async function onUpdateProgress(handler: (line: string) => void): Promise<UnlistenFn> {
+  return listen<string>('dsh-update-progress', (event) => { handler(event.payload) })
 }

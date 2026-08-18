@@ -1,311 +1,499 @@
-use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, State};
+//! Tauri application: persist settings, spawn or connect to dsh web, and update DSH.
+
+mod config;
+mod dsh;
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_store::StoreExt;
+use tokio::sync::Mutex;
+use url::Url;
 
-/// DSH 后端进程管理器
-#[derive(Default)]
-pub struct DshBackend {
-    process: Arc<Mutex<Option<Child>>>,
-    port: Arc<Mutex<Option<u16>>>,
-}
+use config::{parse_ready_line, DshConfig, LaunchMode};
+use dsh::{
+    can_launch_local, install_managed, managed_version, registry_version, resolve_launch,
+    runtime_prefix, scan_lines, spawn_plan, take_pipes, wrap_child, DshProcess,
+};
 
-/// DSH 配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DshConfig {
-    pub host: String,
-    pub port: u16,
-    pub auto_start: bool,
-}
+const STORE_FILE: &str = "desktop.json";
+const STORE_KEY: &str = "config";
 
-impl Default for DshConfig {
-    fn default() -> Self {
-        Self {
-            host: "127.0.0.1".to_string(),
-            port: 3080,
-            auto_start: true,
-        }
-    }
-}
-
-/// 启动 DSH 后端（使用 npx @deepseek-ai/dsh）
-#[tauri::command]
-async fn start_dsh_backend(
-    backend: State<'_, DshBackend>,
+/// Live backend snapshot published to the settings page.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendStatus {
+    state: StatusState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
     config: DshConfig,
-) -> Result<u16, String> {
-    let mut process_lock = backend.process.lock().map_err(|e| e.to_string())?;
+    #[serde(skip_serializing_if = "Option::is_none")]
+    installed_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_version: Option<String>,
+    can_launch_local: bool,
+    platform: String,
+}
 
-    // 如果已经在运行，返回当前端口
-    if process_lock.is_some() {
-        let port_lock = backend.port.lock().map_err(|e| e.to_string())?;
-        if let Some(port) = *port_lock {
-            return Ok(port);
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum StatusState {
+    Idle,
+    Installing,
+    Starting,
+    Ready,
+    Updating,
+    Error,
+}
+
+struct AppState {
+    config: Mutex<DshConfig>,
+    process: Mutex<Option<DshProcess>>,
+    url: Mutex<Option<String>>,
+    state: Mutex<StatusState>,
+    message: Mutex<Option<String>>,
+    installed: Mutex<Option<String>>,
+    latest: Mutex<Option<String>>,
+    shell_url: Mutex<String>,
+}
+
+impl AppState {
+    fn new(config: DshConfig) -> Self {
+        Self {
+            config: Mutex::new(config),
+            process: Mutex::new(None),
+            url: Mutex::new(None),
+            state: Mutex::new(StatusState::Idle),
+            message: Mutex::new(None),
+            installed: Mutex::new(None),
+            latest: Mutex::new(None),
+            shell_url: Mutex::new(String::new()),
         }
     }
 
-    // 使用 npx 运行官方发布的 DSH 包
-    let npx_cmd = if cfg!(windows) { "npx.cmd" } else { "npx" };
-
-    let mut cmd = Command::new(npx_cmd);
-    cmd.args(&[
-        "@deepseek-ai/dsh",
-        "web",
-        "--host", &config.host,
-        "--port", &config.port.to_string(),
-    ])
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
-
-    let child = cmd.spawn().map_err(|e| format!("Failed to start DSH: {}", e))?;
-
-    *process_lock = Some(child);
-
-    let mut port_lock = backend.port.lock().map_err(|e| e.to_string())?;
-    *port_lock = Some(config.port);
-
-    Ok(config.port)
-}
-
-/// 停止 DSH 后端
-#[tauri::command]
-async fn stop_dsh_backend(backend: State<'_, DshBackend>) -> Result<(), String> {
-    let mut process_lock = backend.process.lock().map_err(|e| e.to_string())?;
-
-    if let Some(mut child) = process_lock.take() {
-        child.kill().map_err(|e| format!("Failed to kill DSH process: {}", e))?;
-        child.wait().map_err(|e| format!("Failed to wait for DSH process: {}", e))?;
-    }
-
-    let mut port_lock = backend.port.lock().map_err(|e| e.to_string())?;
-    *port_lock = None;
-
-    Ok(())
-}
-
-/// 获取 DSH 后端状态
-#[tauri::command]
-async fn get_dsh_status(backend: State<'_, DshBackend>) -> Result<bool, String> {
-    let process_lock = backend.process.lock().map_err(|e| e.to_string())?;
-    Ok(process_lock.is_some())
-}
-
-/// 获取 DSH 端口
-#[tauri::command]
-async fn get_dsh_port(backend: State<'_, DshBackend>) -> Result<Option<u16>, String> {
-    let port_lock = backend.port.lock().map_err(|e| e.to_string())?;
-    Ok(*port_lock)
-}
-
-/// 获取 DSH 版本
-#[tauri::command]
-async fn get_dsh_version() -> Result<String, String> {
-    let npx_cmd = if cfg!(windows) { "npx.cmd" } else { "npx" };
-
-    let output = Command::new(npx_cmd)
-        .args(&["@deepseek-ai/dsh", "--version"])
-        .output()
-        .map_err(|e| e.to_string())?;
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-/// 检查 DSH 更新
-#[tauri::command]
-async fn check_dsh_updates() -> Result<String, String> {
-    let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
-
-    let output = Command::new(npm_cmd)
-        .args(&["view", "@deepseek-ai/dsh", "version"])
-        .output()
-        .map_err(|e| e.to_string())?;
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-/// 更新 DSH
-#[tauri::command]
-async fn update_dsh(app: AppHandle) -> Result<(), String> {
-    let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
-
-    let mut child = Command::new(npm_cmd)
-        .args(&["install", "-g", "@deepseek-ai/dsh@latest"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-
-    // 实时发送进度事件
-    if let Some(stdout) = child.stdout.take() {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                app.emit("dsh-update-progress", line).ok();
-            }
+    async fn snapshot(&self) -> BackendStatus {
+        BackendStatus {
+            state: *self.state.lock().await,
+            url: self.url.lock().await.clone(),
+            message: self.message.lock().await.clone(),
+            config: self.config.lock().await.clone(),
+            installed_version: self.installed.lock().await.clone(),
+            latest_version: self.latest.lock().await.clone(),
+            can_launch_local: can_launch_local(),
+            platform: std::env::consts::OS.to_string(),
         }
     }
-
-    let status = child.wait().map_err(|e| e.to_string())?;
-
-    if status.success() {
-        app.emit("dsh-update-complete", ()).ok();
-        Ok(())
-    } else {
-        Err("DSH update failed".to_string())
-    }
 }
 
-/// 获取配置
-#[tauri::command]
-async fn get_config(app: AppHandle) -> Result<DshConfig, String> {
-    let store = app.store("config.json").map_err(|e| e.to_string())?;
-
-    let config = DshConfig {
-        host: store
-            .get("host")
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_else(|| "127.0.0.1".to_string()),
-        port: store
-            .get("port")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(3080) as u16,
-        auto_start: store
-            .get("auto_start")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
+fn load_config(app: &AppHandle) -> DshConfig {
+    let Ok(store) = app.store(STORE_FILE) else {
+        return default_config_for_platform();
     };
+    let mut config = match store.get(STORE_KEY) {
+        Some(value) => serde_json::from_value(value).unwrap_or_default(),
+        None => DshConfig::default(),
+    };
+    if !can_launch_local() {
+        config.launch_mode = LaunchMode::Connect;
+    }
+    config
+}
 
+fn default_config_for_platform() -> DshConfig {
+    let mut config = DshConfig::default();
+    if !can_launch_local() {
+        config.launch_mode = LaunchMode::Connect;
+    }
+    config
+}
+
+fn save_config(app: &AppHandle, config: &DshConfig) -> Result<(), String> {
+    let store = app.store(STORE_FILE).map_err(|error| error.to_string())?;
+    store.set(STORE_KEY, serde_json::to_value(config).map_err(|error| error.to_string())?);
+    store.save().map_err(|error| error.to_string())
+}
+
+async fn publish(app: &AppHandle, state: &AppState) {
+    let snapshot = state.snapshot().await;
+    let _ = app.emit("dsh-status", snapshot);
+}
+
+async fn set_state(app: &AppHandle, state: &AppState, next: StatusState, message: Option<String>) {
+    *state.state.lock().await = next;
+    *state.message.lock().await = message;
+    publish(app, state).await;
+}
+
+fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "main window missing".to_string())
+}
+
+fn navigate(app: &AppHandle, url: &str) -> Result<(), String> {
+    let window = main_window(app)?;
+    let parsed = Url::parse(url).map_err(|error| error.to_string())?;
+    window.navigate(parsed).map_err(|error| error.to_string())
+}
+
+fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn get_status(state: State<'_, Arc<AppState>>) -> Result<BackendStatus, String> {
+    Ok(state.snapshot().await)
+}
+
+#[tauri::command]
+async fn set_config(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    config: DshConfig,
+) -> Result<DshConfig, String> {
+    config.validate()?;
+    save_config(&app, &config)?;
+    *state.config.lock().await = config.clone();
+    publish(&app, &state).await;
     Ok(config)
 }
 
-/// 设置配置
 #[tauri::command]
-async fn set_config(app: AppHandle, config: DshConfig) -> Result<(), String> {
-    let store = app.store("config.json").map_err(|e| e.to_string())?;
+async fn start_dsh(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<BackendStatus, String> {
+    let config = state.config.lock().await.clone();
+    config.validate()?;
+    if !can_launch_local() && config.launch_mode == LaunchMode::Local {
+        return Err("this platform cannot spawn dsh web; switch to connect mode".into());
+    }
+    match config.launch_mode {
+        LaunchMode::Connect => connect_existing(&app, &state, config).await,
+        LaunchMode::Local => spawn_local(&app, &state, config).await,
+    }
+}
 
-    store.set("host", serde_json::json!(config.host));
-    store.set("port", serde_json::json!(config.port));
-    store.set("auto_start", serde_json::json!(config.auto_start));
+async fn connect_existing(
+    app: &AppHandle,
+    state: &AppState,
+    config: DshConfig,
+) -> Result<BackendStatus, String> {
+    set_state(app, state, StatusState::Starting, Some("Connecting".into())).await;
+    let url = config.web_url()?;
+    wait_for_http(&url).await?;
+    *state.url.lock().await = Some(url.clone());
+    set_state(app, state, StatusState::Ready, Some("Connected".into())).await;
+    let _ = navigate(app, &url);
+    Ok(state.snapshot().await)
+}
 
-    store.save().map_err(|e| e.to_string())?;
+async fn spawn_local(
+    app: &AppHandle,
+    state: &AppState,
+    config: DshConfig,
+) -> Result<BackendStatus, String> {
+    stop_inner(state).await?;
+    set_state(app, state, StatusState::Starting, Some("Spawning dsh web".into())).await;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let data = app_data_dir(app)?;
+    let plan = resolve_launch(&data, &cwd, &config)?;
+    let child = spawn_plan(&plan)?;
+    let mut process = wrap_child(child);
+    let (stdout, stderr) = take_pipes(&mut process)?;
+    *state.process.lock().await = Some(process);
 
+    let found = Arc::new(Mutex::new(None::<String>));
+    let found_out = found.clone();
+    let found_err = found.clone();
+    let scan_out = tokio::spawn(async move {
+        let _ = scan_lines(stdout, |line| {
+            if let Some(url) = parse_ready_line(line) {
+                if let Ok(mut slot) = found_out.try_lock() {
+                    *slot = Some(url);
+                    return true;
+                }
+            }
+            false
+        })
+        .await;
+    });
+    let scan_err = tokio::spawn(async move {
+        let _ = scan_lines(stderr, |line| {
+            if let Some(url) = parse_ready_line(line) {
+                if let Ok(mut slot) = found_err.try_lock() {
+                    *slot = Some(url);
+                    return true;
+                }
+            }
+            false
+        })
+        .await;
+    });
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    let url = loop {
+        if let Some(url) = found.lock().await.clone() {
+            break url;
+        }
+        if config.port != 0 {
+            let candidate = config.web_url()?;
+            if probe_http(&candidate).await {
+                break candidate;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            scan_out.abort();
+            scan_err.abort();
+            stop_inner(state).await?;
+            set_state(
+                app,
+                state,
+                StatusState::Error,
+                Some("dsh web did not become ready within 90s".into()),
+            )
+            .await;
+            return Err("dsh web did not become ready within 90s".into());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    *state.url.lock().await = Some(url.clone());
+    set_state(app, state, StatusState::Ready, Some("dsh web is listening".into())).await;
+    let _ = navigate(app, &url);
+    Ok(state.snapshot().await)
+}
+
+async fn wait_for_http(url: &str) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        if probe_http(url).await {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!("no HTTP server at {url}"));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn probe_http(url: &str) -> bool {
+    let Ok(url) = Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let port = url.port_or_known_default().unwrap_or(80);
+    tokio::time::timeout(
+        Duration::from_millis(400),
+        tokio::net::TcpStream::connect((host, port)),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .is_some()
+}
+
+async fn stop_inner(state: &AppState) -> Result<(), String> {
+    if let Some(mut child) = state.process.lock().await.take() {
+        child.stop().await?;
+    }
+    *state.url.lock().await = None;
     Ok(())
 }
 
-/// 检查应用更新
 #[tauri::command]
-async fn check_app_updates(_app: AppHandle) -> Result<bool, String> {
-    // TODO: 实现应用壳更新检查逻辑
-    // 使用 tauri-plugin-updater
-    Ok(false)
+async fn stop_dsh(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<BackendStatus, String> {
+    stop_inner(&state).await?;
+    set_state(&app, &state, StatusState::Idle, Some("Stopped".into())).await;
+    Ok(state.snapshot().await)
 }
 
+#[tauri::command]
+async fn open_web(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let url = state
+        .url
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "dsh web is not ready".to_string())?;
+    navigate(&app, &url)
+}
+
+#[tauri::command]
+async fn open_settings(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let url = state.shell_url.lock().await.clone();
+    if url.is_empty() {
+        return Err("shell URL is not available".into());
+    }
+    navigate(&app, &url)
+}
+
+#[tauri::command]
+async fn check_dsh_updates(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<BackendStatus, String> {
+    let data = app_data_dir(&app)?;
+    *state.installed.lock().await = managed_version(&runtime_prefix(&data));
+    match registry_version().await {
+        Ok(latest) => *state.latest.lock().await = Some(latest),
+        Err(error) => {
+            set_state(&app, &state, StatusState::Error, Some(error.clone())).await;
+            return Err(error);
+        }
+    }
+    publish(&app, &state).await;
+    Ok(state.snapshot().await)
+}
+
+#[tauri::command]
+async fn update_dsh(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<BackendStatus, String> {
+    if !can_launch_local() {
+        return Err("DSH updates require a desktop Node/npm install".into());
+    }
+    set_state(&app, &state, StatusState::Updating, Some("Updating DSH".into())).await;
+    let data = app_data_dir(&app)?;
+    let prefix = runtime_prefix(&data);
+    let handle = app.clone();
+    let result = install_managed(&prefix, move |line| {
+        let _ = handle.emit("dsh-update-progress", line);
+    })
+    .await;
+    match result {
+        Ok(()) => {
+            *state.installed.lock().await = managed_version(&prefix);
+            set_state(
+                &app,
+                &state,
+                StatusState::Idle,
+                Some("DSH update complete; start again to use it".into()),
+            )
+            .await;
+            Ok(state.snapshot().await)
+        }
+        Err(error) => {
+            set_state(&app, &state, StatusState::Error, Some(error.clone())).await;
+            Err(error)
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn build_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder};
+    use tauri::tray::TrayIconBuilder;
+
+    let settings = MenuItemBuilder::with_id("settings", "Settings").build(app)?;
+    let reload = MenuItemBuilder::with_id("open-web", "Open Web UI").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+    let menu = MenuBuilder::new(app)
+        .item(&settings)
+        .item(&reload)
+        .separator()
+        .item(&quit)
+        .build()?;
+    let _tray = TrayIconBuilder::new()
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "settings" => {
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    let state = state.inner().clone();
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let url = state.shell_url.lock().await.clone();
+                        if !url.is_empty() {
+                            let _ = navigate(&app, &url);
+                        }
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    });
+                }
+            }
+            "open-web" => {
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    let state = state.inner().clone();
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(url) = state.url.lock().await.clone() {
+                            let _ = navigate(&app, &url);
+                        }
+                    });
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn build_tray(_app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
+/// Application entry used by both the desktop binary and the mobile library.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if let Err(error) = try_run() {
-        let message = format!("DeepSeek Harness failed to start:\n{error}");
-        eprintln!("{message}");
-        show_fatal_error("DeepSeek Harness App", &message);
-        std::process::exit(1);
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_store::Builder::new().build());
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }));
     }
-}
-
-fn try_run() -> tauri::Result<()> {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_store::Builder::default().build())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_notification::init())
-        .manage(DshBackend::default())
-        .invoke_handler(tauri::generate_handler![
-            start_dsh_backend,
-            stop_dsh_backend,
-            get_dsh_status,
-            get_dsh_port,
-            get_dsh_version,
-            check_dsh_updates,
-            update_dsh,
-            get_config,
-            set_config,
-            check_app_updates,
-        ])
-        .setup(|_app| {
-            // TODO: 实现系统托盘
-            // TODO: 自动启动 DSH 后端（如果配置了 auto_start）
+    builder
+        .setup(|app| {
+            let config = load_config(app.handle());
+            let state = Arc::new(AppState::new(config));
+            if let Ok(data) = app_data_dir(app.handle()) {
+                if let Some(version) = managed_version(&runtime_prefix(&data)) {
+                    if let Ok(mut installed) = state.installed.try_lock() {
+                        *installed = Some(version);
+                    }
+                }
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(url) = window.url() {
+                    if let Ok(mut slot) = state.shell_url.try_lock() {
+                        *slot = url.to_string();
+                    }
+                }
+            }
+            app.manage(state);
+            if let Err(error) = build_tray(app.handle()) {
+                eprintln!("dsh-desktop: tray unavailable: {error}");
+            }
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            get_status,
+            set_config,
+            start_dsh,
+            stop_dsh,
+            open_web,
+            open_settings,
+            check_dsh_updates,
+            update_dsh,
+        ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                if let Some(state) = window.app_handle().try_state::<Arc<AppState>>() {
+                    tauri::async_runtime::block_on(async {
+                        let _ = stop_inner(&state).await;
+                    });
+                }
+            }
+        })
         .run(tauri::generate_context!())
-}
-
-fn show_fatal_error(title: &str, message: &str) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-
-        fn wide(value: &str) -> Vec<u16> {
-            std::ffi::OsStr::new(value)
-                .encode_wide()
-                .chain(std::iter::once(0))
-                .collect()
-        }
-
-        const MB_ICONERROR: u32 = 0x00000010;
-        extern "system" {
-            fn MessageBoxW(
-                hwnd: *mut core::ffi::c_void,
-                text: *const u16,
-                caption: *const u16,
-                ty: u32,
-            ) -> i32;
-        }
-
-        let text = wide(message);
-        let caption = wide(title);
-        unsafe {
-            MessageBoxW(
-                std::ptr::null_mut(),
-                text.as_ptr(),
-                caption.as_ptr(),
-                MB_ICONERROR,
-            );
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = (title, message);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde::Deserialize;
-
-    /// Mirrors `tauri-plugin-shell` 2.x `Config` (`deny_unknown_fields`).
-    /// The 1.0.0 MSI exited immediately because `plugins.shell.scope` is a
-    /// Tauri 1 field that this struct rejects at plugin init.
-    #[derive(Debug, Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct ShellPluginConfig {
-        #[serde(default)]
-        #[allow(dead_code)]
-        open: serde_json::Value,
-    }
-
-    #[test]
-    fn tauri_shell_plugin_config_is_v2_compatible() {
-        let conf: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        let shell = conf
-            .pointer("/plugins/shell")
-            .cloned()
-            .unwrap_or(serde_json::json!({}));
-
-        serde_json::from_value::<ShellPluginConfig>(shell).expect(
-            "plugins.shell must match Tauri 2 (only `open`; no Tauri 1 `scope`)",
-        );
-    }
+        .expect("error while running dsh-desktop");
 }
