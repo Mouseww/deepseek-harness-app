@@ -163,14 +163,16 @@ async fn get_config(app: AppHandle) -> Result<DshConfig, String> {
     let store = app.store("config.json").map_err(|e| e.to_string())?;
 
     let config = DshConfig {
-        host: store.get("host")
-            .and_then(|v| v.as_str())
-            .unwrap_or("127.0.0.1")
-            .to_string(),
-        port: store.get("port")
+        host: store
+            .get("host")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "127.0.0.1".to_string()),
+        port: store
+            .get("port")
             .and_then(|v| v.as_u64())
             .unwrap_or(3080) as u16,
-        auto_start: store.get("auto_start")
+        auto_start: store
+            .get("auto_start")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
     };
@@ -194,7 +196,7 @@ async fn set_config(app: AppHandle, config: DshConfig) -> Result<(), String> {
 
 /// 检查应用更新
 #[tauri::command]
-async fn check_app_updates(app: AppHandle) -> Result<bool, String> {
+async fn check_app_updates(_app: AppHandle) -> Result<bool, String> {
     // TODO: 实现应用壳更新检查逻辑
     // 使用 tauri-plugin-updater
     Ok(false)
@@ -221,7 +223,7 @@ pub fn run() {
             set_config,
             check_app_updates,
         ])
-        .setup(|app| {
+        .setup(|_app| {
             // TODO: 实现系统托盘
             // TODO: 自动启动 DSH 后端（如果配置了 auto_start）
             Ok(())
