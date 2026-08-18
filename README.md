@@ -61,7 +61,7 @@ Built with **Tauri 2.0** and **Rust**, this app delivers:
 
 **Desktop Platforms (Available Now):**
 - 🪟 **Windows** (NSIS & MSI installers)
-- 🍎 **macOS** (DMG for Intel & Apple Silicon)
+- 🍎 **macOS 10.14+** (universal DMG for Intel & Apple Silicon)
 - 🐧 **Linux** (DEB & AppImage)
 
 **Mobile Platforms (Coming Soon):**
@@ -92,23 +92,23 @@ Visit our [Releases Page](https://github.com/deepseek-ai/deepseek-harness-app/re
 
 **Windows:**
 ```
-deepseek-harness-app_1.0.0_x64_en-US.msi
+deepseek-harness-app_1.0.1_x64_en-US.msi
 ```
 
 **macOS:**
 ```
-DeepSeek.Harness.App_1.0.0_universal.dmg
+DeepSeek.Harness.App_1.0.1_universal.dmg
 ```
 
 **Linux (Debian/Ubuntu):**
 ```bash
-sudo dpkg -i deepseek-harness-app_1.0.0_amd64.deb
+sudo dpkg -i deepseek-harness-app_1.0.1_amd64.deb
 ```
 
 **Linux (AppImage):**
 ```bash
-chmod +x deepseek-harness-app_1.0.0_amd64.AppImage
-./deepseek-harness-app_1.0.0_amd64.AppImage
+chmod +x deepseek-harness-app_1.0.1_amd64.AppImage
+./deepseek-harness-app_1.0.1_amd64.AppImage
 ```
 
 ### First Launch
@@ -178,11 +178,16 @@ pnpm tauri dev
 
 # Production build
 pnpm tauri build
+
+# macOS universal DMG (Intel + Apple Silicon, 10.14+)
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+MACOSX_DEPLOYMENT_TARGET=10.14 pnpm tauri:build:macos
 ```
 
 **Build outputs:**
 - Windows: `src-tauri/target/release/bundle/nsis/` and `msi/`
-- macOS: `src-tauri/target/release/bundle/dmg/`
+- macOS (native): `src-tauri/target/release/bundle/dmg/`
+- macOS (universal, 10.14+): `src-tauri/target/universal-apple-darwin/release/bundle/dmg/`
 - Linux: `src-tauri/target/release/bundle/deb/` and `appimage/`
 
 ---

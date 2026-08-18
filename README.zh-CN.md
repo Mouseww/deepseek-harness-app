@@ -61,7 +61,7 @@
 
 **桌面平台（已发布）：**
 - 🪟 **Windows**（NSIS & MSI 安装包）
-- 🍎 **macOS**（DMG，支持 Intel 和 Apple Silicon）
+- 🍎 **macOS 10.14+**（universal DMG，支持 Intel 和 Apple Silicon）
 - 🐧 **Linux**（DEB & AppImage）
 
 **移动平台（即将推出）：**
@@ -92,23 +92,23 @@
 
 **Windows：**
 ```
-deepseek-harness-app_1.0.0_x64_zh-CN.msi
+deepseek-harness-app_1.0.1_x64_zh-CN.msi
 ```
 
 **macOS：**
 ```
-DeepSeek.Harness.App_1.0.0_universal.dmg
+DeepSeek.Harness.App_1.0.1_universal.dmg
 ```
 
 **Linux（Debian/Ubuntu）：**
 ```bash
-sudo dpkg -i deepseek-harness-app_1.0.0_amd64.deb
+sudo dpkg -i deepseek-harness-app_1.0.1_amd64.deb
 ```
 
 **Linux（AppImage）：**
 ```bash
-chmod +x deepseek-harness-app_1.0.0_amd64.AppImage
-./deepseek-harness-app_1.0.0_amd64.AppImage
+chmod +x deepseek-harness-app_1.0.1_amd64.AppImage
+./deepseek-harness-app_1.0.1_amd64.AppImage
 ```
 
 ### 首次启动
@@ -178,11 +178,16 @@ pnpm tauri dev
 
 # 生产构建
 pnpm tauri build
+
+# macOS universal DMG（Intel + Apple Silicon，支持 10.14+）
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+MACOSX_DEPLOYMENT_TARGET=10.14 pnpm tauri:build:macos
 ```
 
 **构建输出位置：**
 - Windows：`src-tauri/target/release/bundle/nsis/` 和 `msi/`
-- macOS：`src-tauri/target/release/bundle/dmg/`
+- macOS（本机架构）：`src-tauri/target/release/bundle/dmg/`
+- macOS（universal，10.14+）：`src-tauri/target/universal-apple-darwin/release/bundle/dmg/`
 - Linux：`src-tauri/target/release/bundle/deb/` 和 `appimage/`
 
 ---

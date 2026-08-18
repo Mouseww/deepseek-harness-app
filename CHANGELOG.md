@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-18
+
+### Changed
+- macOS installer now targets **macOS 10.14+** (Mojave, Intel) and ships a universal (x86_64 + arm64) DMG
+
 ## [1.0.0] - 2026-08-18
 
 ### Added
@@ -32,8 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Supported Platforms
 - Windows 10/11 (x64) - NSIS & MSI installers
-- macOS 11+ (Intel & Apple Silicon) - DMG
+- macOS 10.14+ (Intel) / macOS 11+ (Apple Silicon) - universal DMG
 - Linux (Ubuntu 22.04+, Debian) - DEB & AppImage
 
-[Unreleased]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/deepseek-ai/deepseek-harness-app/releases/tag/v1.0.0
