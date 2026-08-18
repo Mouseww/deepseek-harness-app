@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![DeepSeek Harness Logo](https://via.placeholder.com/200x200?text=DSH+Logo)
+![DeepSeek Harness Logo](src-tauri/icons/128x128.png)
 
 **🚀 DeepSeek Harness 高性能跨平台桌面应用**
 
@@ -92,23 +92,23 @@
 
 **Windows：**
 ```
-deepseek-harness-app_1.0.1_x64_zh-CN.msi
+deepseek-harness-app_1.0.2_x64_zh-CN.msi
 ```
 
 **macOS：**
 ```
-DeepSeek.Harness.App_1.0.1_universal.dmg
+DeepSeek.Harness.App_1.0.2_universal.dmg
 ```
 
 **Linux（Debian/Ubuntu）：**
 ```bash
-sudo dpkg -i deepseek-harness-app_1.0.1_amd64.deb
+sudo dpkg -i deepseek-harness-app_1.0.2_amd64.deb
 ```
 
 **Linux（AppImage）：**
 ```bash
-chmod +x deepseek-harness-app_1.0.1_amd64.AppImage
-./deepseek-harness-app_1.0.1_amd64.AppImage
+chmod +x deepseek-harness-app_1.0.2_amd64.AppImage
+./deepseek-harness-app_1.0.2_amd64.AppImage
 ```
 
 ### 首次启动

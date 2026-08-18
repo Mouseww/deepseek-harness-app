@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-18
+
+### Changed
+- Replace placeholder Tauri icons with official DeepSeek Harness whale branding
+- Use the official colored tray icon for the system tray
+- Update favicon, in-app logo, and README cover image
+
 ## [1.0.1] - 2026-08-18
 
 ### Changed
@@ -40,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - macOS 10.14+ (Intel) / macOS 11+ (Apple Silicon) - universal DMG
 - Linux (Ubuntu 22.04+, Debian) - DEB & AppImage
 
-[Unreleased]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/deepseek-ai/deepseek-harness-app/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/deepseek-ai/deepseek-harness-app/releases/tag/v1.0.0
