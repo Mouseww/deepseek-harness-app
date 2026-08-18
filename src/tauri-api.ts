@@ -63,7 +63,7 @@ export class DshBackendClient {
    * @returns true 表示有新版本可用
    */
   static async checkUpdates(): Promise<boolean> {
-    return await invoke<boolean>('check_updates')
+    return await invoke<boolean>('check_app_updates')
   }
 }
 

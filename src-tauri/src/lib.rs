@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_store::StoreExt;
 
 /// DSH 后端进程管理器
 #[derive(Default)]
