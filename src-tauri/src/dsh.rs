@@ -1,4 +1,12 @@
 //! Resolve, spawn, stop, and update a managed dsh web process.
+//!
+//! The harness is the official npm package `@deepseek-ai/dsh`
+//! (https://github.com/deepseek-ai/deepseek-harness). This crate never vendors that tree.
+
+/// Published package this shell launches. Source: https://github.com/deepseek-ai/deepseek-harness
+pub const DSH_PACKAGE: &str = "@deepseek-ai/dsh";
+/// Pinned first-install spec. Matches `upstream.json` and package.json peerDependencies.
+pub const DSH_PACKAGE_SPEC: &str = "@deepseek-ai/dsh@0.1.0-rc.7";
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -183,7 +191,7 @@ pub fn resolve_launch(app_data: &Path, cwd: &Path, config: &DshConfig) -> Result
     })?;
     let mut args = vec![
         "--yes".into(),
-        "@deepseek-ai/dsh".into(),
+        DSH_PACKAGE_SPEC.into(),
         "web".into(),
     ];
     args.extend(flags);
@@ -256,7 +264,7 @@ where
 pub async fn registry_version() -> Result<String, String> {
     let npm = find_npm().ok_or_else(|| "npm not found on PATH".to_string())?;
     let output = Command::new(npm)
-        .args(["view", "@deepseek-ai/dsh", "version"])
+        .args(["view", DSH_PACKAGE, "version"])
         .output()
         .await
         .map_err(|error| error.to_string())?;

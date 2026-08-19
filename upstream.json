@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "package": "@deepseek-ai/dsh",
+  "npm": "https://www.npmjs.com/package/@deepseek-ai/dsh",
+  "version": "0.1.0-rc.7"
+}

@@ -2,7 +2,13 @@
 
 [English](README.md) | 中文
 
-面向官方 DeepSeek Harness Web UI 的 Tauri 2 窗口。本仓库 **只有原生外壳**，不内嵌 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码。运行时启动或更新已发布的 npm 包 [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh)。
+面向官方 DeepSeek Harness Web UI 的 Tauri 2 窗口。本仓库 **只有原生外壳**。Harness 是引用，不是内嵌源码：
+
+- 钉扎：[`upstream.json`](upstream.json) 与 `package.json` 的 `peerDependencies["@deepseek-ai/dsh"]`
+- 源码：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
+- 运行时包：[`@deepseek-ai/dsh@0.1.0-rc.7`](https://www.npmjs.com/package/@deepseek-ai/dsh)
+
+运行时启动或更新该 npm 包，仓库里没有 harness 源码树。
 
 ## 功能
 

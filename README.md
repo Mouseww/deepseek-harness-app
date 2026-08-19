@@ -2,7 +2,13 @@
 
 English | [中文](README.zh.md)
 
-Tauri 2 window for the official DeepSeek Harness Web UI. This repository is **only the native shell**. It does not vendor [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) source. At runtime it launches or updates the published npm package [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh).
+Tauri 2 window for the official DeepSeek Harness Web UI. This repository is **only the native shell**. The harness itself is referenced, not vendored:
+
+- Pin: [`upstream.json`](upstream.json) and `package.json` `peerDependencies["@deepseek-ai/dsh"]`
+- Source: [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
+- Runtime package: [`@deepseek-ai/dsh@0.1.0-rc.7`](https://www.npmjs.com/package/@deepseek-ai/dsh)
+
+At runtime the shell launches or updates that npm package. It does not contain the harness tree.
 
 ## What it does
 
