@@ -122,19 +122,24 @@ jobs:
             echo "tag=v${ver}" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{steps.meta.outputs.tag}}
-          name: DSH Desktop ${{steps.meta.outputs.tag}}
-          draft: false
-          make_latest: true
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: dist/**
-          body: |
-            Installers (not the GitHub source zip):
-            - Windows: NSIS `.exe` and MSI
-            - macOS: universal DMG
-            - Linux: AppImage and `.deb`
-
-            DSH core is the official `@deepseek-ai/dsh` npm package from https://github.com/deepseek-ai/deepseek-harness.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        run: |
+          set -euo pipefail
+          tag="${{steps.meta.outputs.tag}}"
+          mapfile -t files < <(find dist -type f | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no installer files under dist/" >&2
+            find dist -print >&2 || true
+            exit 1
+          fi
+          printf 'publishing %s\n' "$tag"
+          printf '  %s\n' "${files[@]}"
+          notes='Installers (not the GitHub source zip): Windows NSIS/MSI, macOS universal DMG, Linux AppImage/deb. DSH core is the official @deepseek-ai/dsh package from https://github.com/deepseek-ai/deepseek-harness.'
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+            gh release edit "$tag" --title "DSH Desktop $tag" --notes "$notes" --latest
+          else
+            gh release create "$tag" "${files[@]}" --title "DSH Desktop $tag" --notes "$notes" --latest
+          fi
