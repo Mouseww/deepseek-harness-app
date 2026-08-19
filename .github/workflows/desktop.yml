@@ -69,11 +69,11 @@ jobs:
 
       - name: Install Linux WebKit
         if: runner.os == 'Linux'
-        timeout-minutes: 5
+        timeout-minutes: 20
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update -y
+          sudo apt-get -o Acquire::Retries=3 update -y
           sudo apt-get -o Acquire::Retries=3 -y --no-install-recommends install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Install
