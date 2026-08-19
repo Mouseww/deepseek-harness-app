@@ -8,11 +8,11 @@ Tauri 2 window for the official DeepSeek Harness Web UI. This repository is **on
 - Source: [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 - Runtime package: [`@deepseek-ai/dsh@0.1.0-rc.7`](https://www.npmjs.com/package/@deepseek-ai/dsh)
 
-At runtime the shell launches or updates that npm package. It does not contain the harness tree.
+Packaged installers are out of the box: they ship official Node 22 plus that npm package. Users do not install Node, pnpm, or DSH. [anywhere-labs/deepseek-harness-desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) does the same by embedding Node inside Electron; this app stays on Tauri and embeds the same official Node + `@deepseek-ai/dsh` binaries instead.
 
 ## What it does
 
-- **Windows / macOS / Linux:** spawn `dsh web --host <host> --port <port>` via a managed app-data install, `dsh` on PATH, or `npx @deepseek-ai/dsh`, then navigate to the ready URL.
+- **Windows / macOS / Linux:** start the bundled `node` + `@deepseek-ai/dsh` `web` command, then navigate to the ready URL. Unpackaged `pnpm dev` can also use a system Node.
 - **Android / iOS:** connect-only. Enter a reachable `dsh web` host and port.
 - **Settings:** persist host, port, auto-start, and launch mode.
 - **DSH updates:** `npm install @deepseek-ai/dsh@latest` in the app-data prefix. That does not rebuild this shell.

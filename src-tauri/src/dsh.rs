@@ -130,25 +130,89 @@ pub struct LaunchPlan {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
+    pub env: Vec<(String, String)>,
 }
 
-/// True when the managed prefix still needs `npm install`.
-pub fn needs_managed_install(app_data: &Path) -> bool {
+fn node_bin_name() -> &'static str {
+    if cfg!(windows) {
+        "node.exe"
+    } else {
+        "node"
+    }
+}
+
+fn dsh_bin_under(prefix: &Path) -> PathBuf {
+    prefix
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh")
+        .join("lib")
+        .join("bin.js")
+}
+
+/// Bundled Node + `@deepseek-ai/dsh` shipped inside the installer.
+pub fn bundled_runtime(root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let node = root.join("runtime").join("node").join(node_bin_name());
+    let bin = dsh_bin_under(&root.join("runtime").join("dsh"));
+    if node.is_file() && bin.is_file() {
+        Some((node, bin))
+    } else {
+        None
+    }
+}
+
+/// Search resource dir, then src-tauri/, then the given roots.
+pub fn find_bundled_runtime(hints: &[PathBuf]) -> Option<(PathBuf, PathBuf)> {
+    for hint in hints {
+        if let Some(found) = bundled_runtime(hint) {
+            return Some(found);
+        }
+        if let Some(found) = bundled_runtime(&hint.join("src-tauri")) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn home_env(app_data: &Path) -> Vec<(String, String)> {
+    vec![("DSH_HOME".into(), app_data.join("dsh-home").to_string_lossy().into_owned())]
+}
+
+/// True when there is no bundled runtime and the app-data prefix still needs npm.
+pub fn needs_managed_install(app_data: &Path, hints: &[PathBuf]) -> bool {
     std::env::var("DSH_DESKTOP_BIN").is_err()
         && find_checkout(app_data).is_none()
+        && find_bundled_runtime(hints).is_none()
         && managed_bin(&runtime_prefix(app_data)).is_none()
 }
 
-/// Choose DSH_DESKTOP_BIN, an explicit checkout, or `node` + the managed bin.js.
-pub fn resolve_launch(app_data: &Path, _cwd: &Path, config: &DshConfig) -> Result<LaunchPlan, String> {
+/// Choose bundled runtime, DSH_DESKTOP_BIN, an explicit checkout, or managed `node` + bin.js.
+pub fn resolve_launch(
+    app_data: &Path,
+    hints: &[PathBuf],
+    config: &DshConfig,
+) -> Result<LaunchPlan, String> {
     let flags = web_launch_args(&config.host, config.port);
+    let home = app_data.join("dsh-home");
+    let env = home_env(app_data);
     if let Ok(explicit) = std::env::var("DSH_DESKTOP_BIN") {
         let mut args = vec!["web".into()];
         args.extend(flags);
         return Ok(LaunchPlan {
             program: PathBuf::from(explicit),
             args,
-            cwd: None,
+            cwd: Some(home),
+            env,
+        });
+    }
+    if let Some((node, bin)) = find_bundled_runtime(hints) {
+        let mut args = vec![bin.to_string_lossy().into_owned(), "web".into()];
+        args.extend(flags);
+        return Ok(LaunchPlan {
+            program: node,
+            args,
+            cwd: Some(home),
+            env,
         });
     }
     if let Some(root) = find_checkout(app_data) {
@@ -161,10 +225,11 @@ pub fn resolve_launch(app_data: &Path, _cwd: &Path, config: &DshConfig) -> Resul
             program: pnpm,
             args,
             cwd: Some(root),
+            env,
         });
     }
     let node = find_node().ok_or_else(|| {
-        "Node.js 22.19+ is not on PATH. Install Node, or set DSH_DESKTOP_NODE / DSH_DESKTOP_BIN."
+        "This build has no bundled Node, and Node.js 22.19+ is not on PATH. Use a packaged installer or install Node."
             .to_string()
     })?;
     let bin = managed_bin(&runtime_prefix(app_data)).ok_or_else(|| {
@@ -175,7 +240,8 @@ pub fn resolve_launch(app_data: &Path, _cwd: &Path, config: &DshConfig) -> Resul
     Ok(LaunchPlan {
         program: node,
         args,
-        cwd: None,
+        cwd: Some(home),
+        env,
     })
 }
 
@@ -223,7 +289,11 @@ pub fn spawn_plan(plan: &LaunchPlan) -> Result<Child, String> {
     let mut cmd = command_for(&plan.program, &plan.args);
     apply_stdio(&mut cmd);
     if let Some(cwd) = &plan.cwd {
+        let _ = std::fs::create_dir_all(cwd);
         cmd.current_dir(cwd);
+    }
+    for (key, value) in &plan.env {
+        cmd.env(key, value);
     }
     cmd.spawn()
         .map_err(|error| format!("spawn {}: {error}", plan.program.display()))
@@ -330,6 +400,7 @@ mod tests {
         std::fs::create_dir_all(tmp.join("apps").join("cli")).unwrap();
         std::fs::write(tmp.join("pnpm-workspace.yaml"), "packages: []\n").unwrap();
         assert_eq!(find_checkout(&tmp.join("apps").join("desktop")), None);
+        assert!(bundled_runtime(&tmp).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

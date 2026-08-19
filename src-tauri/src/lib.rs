@@ -146,6 +146,22 @@ fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
         .map_err(|error| error.to_string())
 }
 
+fn runtime_hints(app: &AppHandle) -> Vec<std::path::PathBuf> {
+    let mut hints = Vec::new();
+    if let Ok(dir) = app.path().resource_dir() {
+        hints.push(dir);
+    }
+    if let Ok(dir) = std::env::current_dir() {
+        hints.push(dir);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            hints.push(dir.to_path_buf());
+        }
+    }
+    hints
+}
+
 #[tauri::command]
 async fn get_status(state: State<'_, Arc<AppState>>) -> Result<BackendStatus, String> {
     Ok(state.snapshot().await)
@@ -197,9 +213,9 @@ async fn spawn_local(
     config: DshConfig,
 ) -> Result<BackendStatus, String> {
     stop_inner(state).await?;
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let data = app_data_dir(app)?;
-    if needs_managed_install(&data) {
+    let hints = runtime_hints(app);
+    if needs_managed_install(&data, &hints) {
         set_state(
             app,
             state,
@@ -220,7 +236,7 @@ async fn spawn_local(
         *state.installed.lock().await = managed_version(&runtime_prefix(&data));
     }
     set_state(app, state, StatusState::Starting, Some("Spawning dsh web".into())).await;
-    let plan = resolve_launch(&data, &cwd, &config)?;
+    let plan = resolve_launch(&data, &hints, &config)?;
     let _ = app.emit("dsh-spawn-log", format!("$ {}", launch_command_line(&plan)));
     let child = spawn_plan(&plan)?;
     let mut process = wrap_child(child);

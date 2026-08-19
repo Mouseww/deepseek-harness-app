@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DSH Desktop",
-  "version": "1.2.4",
+  "version": "1.3.0",
   "identifier": "ai.deepseek.harness.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:1420",
     "beforeDevCommand": "pnpm run dev:ui",
-    "beforeBuildCommand": "pnpm run build:ui"
+    "beforeBuildCommand": "node scripts/bundle-runtime.mjs && pnpm run build:ui"
   },
   "app": {
     "withGlobalTauri": false,
@@ -30,6 +30,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": [
+      "runtime/node/*",
+      "runtime/dsh/**/*",
+      "runtime/manifest.json"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-app",
   "description": "Tauri 2 shell that launches or connects to official dsh web",
-  "version": "1.2.4",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,8 @@
     "ios:init": "tauri ios init",
     "ios:dev": "tauri ios dev",
     "ios:build": "tauri ios build",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "bundle:runtime": "node scripts/bundle-runtime.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0"

@@ -32,8 +32,8 @@ jobs:
             shell: pwsh
           - name: macos
             os: macos-latest
-            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            args: --target universal-apple-darwin
+            rust_targets: ''
+            args: ''
             shell: bash
           - name: linux
             os: ubuntu-24.04
@@ -41,7 +41,7 @@ jobs:
             args: ''
             shell: bash
     runs-on: ${{matrix.os}}
-    timeout-minutes: 40
+    timeout-minutes: 55
     defaults:
       run:
         shell: ${{matrix.shell}}
@@ -81,6 +81,9 @@ jobs:
 
       - name: Icons
         run: pnpm icons
+
+      - name: Bundle Node and DSH
+        run: pnpm bundle:runtime
 
       - name: Build installers
         run: pnpm tauri build ${{matrix.args}}

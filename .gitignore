@@ -8,6 +8,11 @@ Thumbs.db
 .vscode/
 .idea/
 src-tauri/target/
+src-tauri/runtime/node/*
+!src-tauri/runtime/node/.gitkeep
+src-tauri/runtime/dsh/**
+!src-tauri/runtime/dsh/.gitkeep
+.runtime-cache/
 src-tauri/gen/
 src-tauri/WixTools/
 *.pdb

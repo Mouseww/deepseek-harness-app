@@ -8,11 +8,11 @@
 - 源码：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 - 运行时包：[`@deepseek-ai/dsh@0.1.0-rc.7`](https://www.npmjs.com/package/@deepseek-ai/dsh)
 
-运行时启动或更新该 npm 包，仓库里没有 harness 源码树。
+安装包开箱即用：内置官方 Node 22 和该 npm 包。用户不必再装 Node、pnpm 或 DSH。[anywhere-labs/deepseek-harness-desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) 靠 Electron 自带 Node 做到这一点；本应用保持 Tauri，改为随包附带同样的官方 Node + `@deepseek-ai/dsh`。
 
 ## 功能
 
-- **Windows / macOS / Linux：** 通过应用数据目录中的托管安装、PATH 上的 `dsh`，或 `npx @deepseek-ai/dsh` 启动 `dsh web --host <host> --port <port>`，再导航到就绪 URL。
+- **Windows / macOS / Linux：** 启动捆绑的 `node` + `@deepseek-ai/dsh` 的 `web` 命令，再导航到就绪 URL。未打包的 `pnpm dev` 也可以用系统 Node。
 - **Android / iOS：** 仅连接。填写可访问的 `dsh web` host 与 port。
 - **设置：** 持久化 host、port、自动启动和启动模式。
 - **DSH 更新：** 在应用数据前缀中执行 `npm install @deepseek-ai/dsh@latest`。这不会重编本外壳。
