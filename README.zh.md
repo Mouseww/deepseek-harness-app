@@ -4,7 +4,7 @@
 
 面向官方 DeepSeek Harness Web UI 的 Tauri 2 窗口。本仓库 **只有原生外壳**。Harness 是引用，不是内嵌源码：
 
-- 钉扎：[`upstream.json`](upstream.json) 与 `package.json` 的 `peerDependencies["@deepseek-ai/dsh"]`
+- 钉扎：[`upstream.json`](upstream.json) 与 `package.json` 的 `upstream` 字段
 - 源码：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 - 运行时包：[`@deepseek-ai/dsh@0.1.0-rc.7`](https://www.npmjs.com/package/@deepseek-ai/dsh)
 
