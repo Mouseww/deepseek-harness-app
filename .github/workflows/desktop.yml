@@ -36,7 +36,7 @@ jobs:
             args: ''
             shell: bash
           - name: linux
-            os: ubuntu-24.04
+            os: ubuntu-22.04
             rust_targets: ''
             args: --bundles deb
             shell: bash
@@ -69,12 +69,42 @@ jobs:
 
       - name: Install Linux WebKit
         if: runner.os == 'Linux'
-        timeout-minutes: 20
+        timeout-minutes: 12
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get -o Acquire::Retries=3 update -y
-          sudo apt-get -o Acquire::Retries=3 -y --no-install-recommends install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2
+          set -euo pipefail
+          sudo systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+          sudo killall apt-get apt unattended-upgrade 2>/dev/null || true
+          sudo rm -f /var/lib/man-db/auto-update
+          wait_lock() {
+            for i in $(seq 1 30); do
+              if sudo fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; then
+                echo "waiting for apt lock ($i)"
+                sleep 2
+              else
+                return 0
+              fi
+            done
+          }
+          install_pkgs() {
+            wait_lock
+            sudo timeout 90 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -y
+            wait_lock
+            sudo timeout 240 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \
+              -y --no-install-recommends install \
+              libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          }
+          for attempt in 1 2 3; do
+            echo "apt attempt $attempt"
+            if install_pkgs; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed; resetting dpkg"
+            sudo dpkg --configure -a || true
+            sleep 5
+          done
+          exit 1
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -109,6 +139,7 @@ jobs:
 
   release:
     needs: build
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
