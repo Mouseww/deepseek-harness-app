@@ -33,7 +33,7 @@ pnpm dev
 
 本地打安装包：`pnpm build`。
 
-在 GitHub：**Actions → desktop → Run workflow**。该 run 会上传 Windows NSIS、macOS universal DMG、Linux AppImage/deb。打 `v*` 标签还会打开一份 draft Release。
+在 GitHub：**Actions → desktop → Run workflow**，或推送 `v*` 标签。成功的 run 会发布 GitHub Release，附带 Windows NSIS/MSI、macOS universal DMG、Linux AppImage/deb。GitHub 自动附带的源码 zip 不是安装包。
 
 ## 测试
 

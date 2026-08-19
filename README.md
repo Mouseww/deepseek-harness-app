@@ -33,7 +33,7 @@ pnpm dev
 
 Local installers: `pnpm build`.
 
-On GitHub: **Actions → desktop → Run workflow**. The run uploads Windows NSIS, macOS universal DMG, and Linux AppImage/deb. A `v*` tag also opens a draft Release.
+On GitHub: **Actions → desktop → Run workflow**, or push a `v*` tag. A successful run publishes a GitHub Release with Windows NSIS/MSI, macOS universal DMG, and Linux AppImage/deb. GitHub's source zip is not the app.
 
 ## Tests
 
