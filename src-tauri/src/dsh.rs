@@ -256,13 +256,34 @@ fn packaged_env(app_data: &Path, prefix: &Path) -> Vec<(String, String)> {
     env
 }
 
+/// Tauri's resource dir is often `\\?\D:\...`. Node rejects `file:////?/D:/`.
+fn normalize_os_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    let _ = text;
+    path.to_path_buf()
+}
+
 fn path_to_file_url(path: &Path) -> String {
-    let raw = path.to_string_lossy().replace('\\', "/");
-    let encoded = raw.replace(' ', "%20");
-    if encoded.starts_with('/') {
-        format!("file://{encoded}")
-    } else {
-        format!("file:///{encoded}")
+    let path = normalize_os_path(path);
+    match url::Url::from_file_path(&path) {
+        Ok(url) => url.into(),
+        Err(()) => {
+            let raw = path.to_string_lossy().replace('\\', "/");
+            if raw.starts_with('/') {
+                format!("file://{raw}")
+            } else {
+                format!("file:///{raw}")
+            }
+        }
     }
 }
 
