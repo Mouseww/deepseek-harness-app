@@ -32,8 +32,21 @@ function target() {
 }
 
 function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, stdio: 'inherit', shell: false })
-  if (result.status !== 0) throw new Error(command + ' failed (' + result.status + ')')
+  const result = spawnSync(command, args, { cwd, stdio: 'inherit', shell: false, windowsHide: true })
+  if (result.error) throw new Error(command + ' spawn failed: ' + result.error.message)
+  if (result.status !== 0) {
+    throw new Error(command + ' failed (status=' + result.status + ' signal=' + result.signal + ')')
+  }
+}
+
+function findNpmCli(extractedRoot) {
+  const candidates = [
+    join(extractedRoot, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(extractedRoot, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ]
+  const found = candidates.find((path) => existsSync(path))
+  if (found === undefined) throw new Error('npm-cli.js not found under ' + extractedRoot)
+  return found
 }
 
 async function download(url, dest) {
@@ -94,10 +107,12 @@ if (!existsSync(extractedNode)) throw new Error('missing ' + extractedNode)
 cpSync(extractedNode, nodeBin)
 if (process.platform !== 'win32') chmodSync(nodeBin, 0o755)
 
-console.log('bundle-runtime: npm install ' + dshSpec)
+const npmCli = findNpmCli(extractedRoot)
+console.log('bundle-runtime: ' + nodeBin + ' ' + npmCli + ' install ' + dshSpec)
 mkdirSync(dshDir, { recursive: true })
 writeFileSync(join(dshDir, 'package.json'), JSON.stringify({ private: true, name: 'dsh-runtime' }, null, 2) + '\n')
-run(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+run(nodeBin, [
+  npmCli,
   'install',
   dshSpec,
   '--omit=dev',
