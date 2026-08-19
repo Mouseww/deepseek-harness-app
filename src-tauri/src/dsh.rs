@@ -23,6 +23,11 @@ pub struct DshProcess {
 }
 
 impl DshProcess {
+    /// Non-blocking poll. `Some` means the child has exited.
+    pub fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, String> {
+        self.child.try_wait().map_err(|error| error.to_string())
+    }
+
     /// Kill the process tree. Windows uses taskkill /T; elsewhere SIGKILL on the child.
     pub async fn stop(&mut self) -> Result<(), String> {
         let Some(pid) = self.child.id() else {
@@ -83,29 +88,13 @@ fn is_dsh_checkout(dir: &Path) -> bool {
     dir.join("pnpm-workspace.yaml").is_file() && dir.join("apps").join("cli").is_dir()
 }
 
-/// Resolve an official deepseek-harness checkout. This shell never vendors that tree.
-/// Order: DSH_CHECKOUT, a sibling directory named deepseek-harness, then walk up from start.
-pub fn find_checkout(start: &Path) -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var("DSH_CHECKOUT") {
-        let path = PathBuf::from(explicit);
-        if is_dsh_checkout(&path) {
-            return Some(path);
-        }
-    }
-    if let Some(parent) = start.parent() {
-        let sibling = parent.join("deepseek-harness");
-        if is_dsh_checkout(&sibling) {
-            return Some(sibling);
-        }
-    }
-    let mut current = Some(start);
-    while let Some(dir) = current {
-        if is_dsh_checkout(dir) {
-            return Some(dir.to_path_buf());
-        }
-        current = dir.parent();
-    }
-    None
+/// Resolve an official deepseek-harness checkout only when DSH_CHECKOUT is set.
+/// Nearby clones are not used automatically: `pnpm dsh web` from source can sit in a
+/// first compile for minutes and never print a ready line in time.
+pub fn find_checkout(_start: &Path) -> Option<PathBuf> {
+    let explicit = std::env::var("DSH_CHECKOUT").ok()?;
+    let path = PathBuf::from(explicit);
+    is_dsh_checkout(&path).then_some(path)
 }
 
 /// App-data directory that holds the managed npm prefix.
@@ -143,8 +132,15 @@ pub struct LaunchPlan {
     pub cwd: Option<PathBuf>,
 }
 
-/// Choose checkout pnpm dsh, a managed bin, PATH dsh, or npx.
-pub fn resolve_launch(app_data: &Path, cwd: &Path, config: &DshConfig) -> Result<LaunchPlan, String> {
+/// True when the managed prefix still needs `npm install`.
+pub fn needs_managed_install(app_data: &Path) -> bool {
+    std::env::var("DSH_DESKTOP_BIN").is_err()
+        && find_checkout(app_data).is_none()
+        && managed_bin(&runtime_prefix(app_data)).is_none()
+}
+
+/// Choose DSH_DESKTOP_BIN, an explicit checkout, or `node` + the managed bin.js.
+pub fn resolve_launch(app_data: &Path, _cwd: &Path, config: &DshConfig) -> Result<LaunchPlan, String> {
     let flags = web_launch_args(&config.host, config.port);
     if let Ok(explicit) = std::env::var("DSH_DESKTOP_BIN") {
         let mut args = vec!["web".into()];
@@ -155,10 +151,10 @@ pub fn resolve_launch(app_data: &Path, cwd: &Path, config: &DshConfig) -> Result
             cwd: None,
         });
     }
-    if let Some(root) = find_checkout(cwd).or_else(|| find_checkout(app_data)) {
+    if let Some(root) = find_checkout(app_data) {
         let pnpm = which("pnpm.cmd")
             .or_else(|| which("pnpm"))
-            .ok_or_else(|| "pnpm not found on PATH for this checkout".to_string())?;
+            .ok_or_else(|| "pnpm not found on PATH for DSH_CHECKOUT".to_string())?;
         let mut args = vec!["dsh".into(), "web".into()];
         args.extend(flags);
         return Ok(LaunchPlan {
@@ -167,57 +163,67 @@ pub fn resolve_launch(app_data: &Path, cwd: &Path, config: &DshConfig) -> Result
             cwd: Some(root),
         });
     }
-    if let (Some(node), Some(bin)) = (find_node(), managed_bin(&runtime_prefix(app_data))) {
-        let mut args = vec![bin.to_string_lossy().into_owned(), "web".into()];
-        args.extend(flags);
-        return Ok(LaunchPlan {
-            program: node,
-            args,
-            cwd: None,
-        });
-    }
-    if let Some(dsh) = which("dsh.cmd").or_else(|| which("dsh")) {
-        let mut args = vec!["web".into()];
-        args.extend(flags);
-        return Ok(LaunchPlan {
-            program: dsh,
-            args,
-            cwd: None,
-        });
-    }
-    let npx = which("npx.cmd").or_else(|| which("npx")).ok_or_else(|| {
-        "no dsh, managed install, or npx found; install Node.js 22.19+ or set DSH_DESKTOP_BIN"
+    let node = find_node().ok_or_else(|| {
+        "Node.js 22.19+ is not on PATH. Install Node, or set DSH_DESKTOP_NODE / DSH_DESKTOP_BIN."
             .to_string()
     })?;
-    let mut args = vec![
-        "--yes".into(),
-        DSH_PACKAGE_SPEC.into(),
-        "web".into(),
-    ];
+    let bin = managed_bin(&runtime_prefix(app_data)).ok_or_else(|| {
+        format!("managed {DSH_PACKAGE} is not installed yet")
+    })?;
+    let mut args = vec![bin.to_string_lossy().into_owned(), "web".into()];
     args.extend(flags);
     Ok(LaunchPlan {
-        program: npx,
+        program: node,
         args,
         cwd: None,
     })
 }
 
-/// Spawn the resolved command with piped stdio.
-pub fn spawn_plan(plan: &LaunchPlan) -> Result<Child, String> {
-    let mut cmd = Command::new(&plan.program);
-    cmd.args(&plan.args)
-        .stdin(Stdio::null())
+/// Human-readable command line for the settings log.
+pub fn launch_command_line(plan: &LaunchPlan) -> String {
+    let mut parts = vec![plan.program.display().to_string()];
+    parts.extend(plan.args.iter().cloned());
+    parts.join(" ")
+}
+
+fn apply_stdio(cmd: &mut Command) {
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    if let Some(cwd) = &plan.cwd {
-        cmd.current_dir(cwd);
-    }
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    }
+}
+
+fn command_for(program: &Path, args: &[String]) -> Command {
+    #[cfg(windows)]
+    {
+        let ext = program
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext == "cmd" || ext == "bat" {
+            let mut cmd = Command::new("cmd.exe");
+            cmd.arg("/D").arg("/C").arg(program).args(args);
+            return cmd;
+        }
+    }
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    cmd
+}
+
+/// Spawn the resolved command with piped stdio.
+pub fn spawn_plan(plan: &LaunchPlan) -> Result<Child, String> {
+    let mut cmd = command_for(&plan.program, &plan.args);
+    apply_stdio(&mut cmd);
+    if let Some(cwd) = &plan.cwd {
+        cmd.current_dir(cwd);
     }
     cmd.spawn()
         .map_err(|error| format!("spawn {}: {error}", plan.program.display()))
@@ -263,8 +269,8 @@ where
 /// npm view @deepseek-ai/dsh version
 pub async fn registry_version() -> Result<String, String> {
     let npm = find_npm().ok_or_else(|| "npm not found on PATH".to_string())?;
-    let output = Command::new(npm)
-        .args(["view", DSH_PACKAGE, "version"])
+    let args = ["view".into(), DSH_PACKAGE.into(), "version".into()];
+    let output = command_for(&npm, &args)
         .output()
         .await
         .map_err(|error| error.to_string())?;
@@ -274,27 +280,26 @@ pub async fn registry_version() -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Install or upgrade the managed prefix with npm install @deepseek-ai/dsh@latest.
-pub async fn install_managed<F>(prefix: &Path, mut on_line: F) -> Result<(), String>
+/// Install or upgrade the managed prefix with `npm install <spec>`.
+pub async fn install_managed<F>(prefix: &Path, spec: &str, mut on_line: F) -> Result<(), String>
 where
     F: FnMut(String),
 {
     let npm = find_npm().ok_or_else(|| "npm not found on PATH".to_string())?;
     std::fs::create_dir_all(prefix).map_err(|error| error.to_string())?;
-    let mut child = Command::new(npm)
-        .current_dir(prefix)
-        .args([
-            "install",
-            "@deepseek-ai/dsh@latest",
-            "--omit=dev",
-            "--no-fund",
-            "--no-audit",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| error.to_string())?;
+    let args = [
+        "install".into(),
+        spec.to_string(),
+        "--omit=dev".into(),
+        "--no-fund".into(),
+        "--no-audit".into(),
+        "--loglevel".into(),
+        "info".into(),
+    ];
+    let mut child = command_for(&npm, &args);
+    apply_stdio(&mut child);
+    child.current_dir(prefix);
+    let mut child = child.spawn().map_err(|error| error.to_string())?;
     if let Some(stdout) = child.stdout.take() {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
@@ -324,7 +329,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join("apps").join("cli")).unwrap();
         std::fs::write(tmp.join("pnpm-workspace.yaml"), "packages: []\n").unwrap();
-        assert_eq!(find_checkout(&tmp.join("apps").join("desktop")), Some(tmp.clone()));
+        assert_eq!(find_checkout(&tmp.join("apps").join("desktop")), None);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

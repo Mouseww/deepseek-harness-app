@@ -14,8 +14,9 @@ use url::Url;
 
 use config::{parse_ready_line, DshConfig, LaunchMode};
 use dsh::{
-    can_launch_local, install_managed, managed_version, registry_version, resolve_launch,
-    runtime_prefix, scan_lines, spawn_plan, take_pipes, wrap_child, DshProcess,
+    can_launch_local, install_managed, launch_command_line, managed_version, needs_managed_install,
+    registry_version, resolve_launch, runtime_prefix, scan_lines, spawn_plan, take_pipes,
+    wrap_child, DshProcess,
 };
 
 const STORE_FILE: &str = "desktop.json";
@@ -196,20 +197,50 @@ async fn spawn_local(
     config: DshConfig,
 ) -> Result<BackendStatus, String> {
     stop_inner(state).await?;
-    set_state(app, state, StatusState::Starting, Some("Spawning dsh web".into())).await;
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let data = app_data_dir(app)?;
+    if needs_managed_install(&data) {
+        set_state(
+            app,
+            state,
+            StatusState::Installing,
+            Some(format!("Installing {} into the app runtime prefix", dsh::DSH_PACKAGE)),
+        )
+        .await;
+        let handle = app.clone();
+        let prefix = runtime_prefix(&data);
+        if let Err(error) = install_managed(&prefix, dsh::DSH_PACKAGE_SPEC, move |line| {
+            let _ = handle.emit("dsh-spawn-log", line);
+        })
+        .await
+        {
+            set_state(app, state, StatusState::Error, Some(error.clone())).await;
+            return Err(error);
+        }
+        *state.installed.lock().await = managed_version(&runtime_prefix(&data));
+    }
+    set_state(app, state, StatusState::Starting, Some("Spawning dsh web".into())).await;
     let plan = resolve_launch(&data, &cwd, &config)?;
+    let _ = app.emit("dsh-spawn-log", format!("$ {}", launch_command_line(&plan)));
     let child = spawn_plan(&plan)?;
     let mut process = wrap_child(child);
     let (stdout, stderr) = take_pipes(&mut process)?;
     *state.process.lock().await = Some(process);
 
     let found = Arc::new(Mutex::new(None::<String>));
+    let logs = Arc::new(Mutex::new(Vec::<String>::new()));
     let found_out = found.clone();
     let found_err = found.clone();
+    let logs_out = logs.clone();
+    let logs_err = logs.clone();
+    let emit_out = app.clone();
+    let emit_err = app.clone();
     let scan_out = tokio::spawn(async move {
         let _ = scan_lines(stdout, |line| {
+            let _ = emit_out.emit("dsh-spawn-log", line.to_string());
+            if let Ok(mut slot) = logs_out.try_lock() {
+                slot.push(line.to_string());
+            }
             if let Some(url) = parse_ready_line(line) {
                 if let Ok(mut slot) = found_out.try_lock() {
                     *slot = Some(url);
@@ -222,6 +253,10 @@ async fn spawn_local(
     });
     let scan_err = tokio::spawn(async move {
         let _ = scan_lines(stderr, |line| {
+            let _ = emit_err.emit("dsh-spawn-log", line.to_string());
+            if let Ok(mut slot) = logs_err.try_lock() {
+                slot.push(line.to_string());
+            }
             if let Some(url) = parse_ready_line(line) {
                 if let Ok(mut slot) = found_err.try_lock() {
                     *slot = Some(url);
@@ -238,6 +273,16 @@ async fn spawn_local(
         if let Some(url) = found.lock().await.clone() {
             break url;
         }
+        if let Some(process) = state.process.lock().await.as_mut() {
+            if let Ok(Some(status)) = process.try_wait() {
+                scan_out.abort();
+                scan_err.abort();
+                let tail = tail_logs(&logs).await;
+                let message = format!("dsh web exited ({status}) before it was ready.{tail}");
+                set_state(app, state, StatusState::Error, Some(message.clone())).await;
+                return Err(message);
+            }
+        }
         if config.port != 0 {
             let candidate = config.web_url()?;
             if probe_http(&candidate).await {
@@ -248,14 +293,10 @@ async fn spawn_local(
             scan_out.abort();
             scan_err.abort();
             stop_inner(state).await?;
-            set_state(
-                app,
-                state,
-                StatusState::Error,
-                Some("dsh web did not become ready within 90s".into()),
-            )
-            .await;
-            return Err("dsh web did not become ready within 90s".into());
+            let tail = tail_logs(&logs).await;
+            let message = format!("dsh web did not become ready within 90s.{tail}");
+            set_state(app, state, StatusState::Error, Some(message.clone())).await;
+            return Err(message);
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
@@ -263,6 +304,15 @@ async fn spawn_local(
     set_state(app, state, StatusState::Ready, Some("dsh web is listening".into())).await;
     let _ = navigate(app, &url);
     Ok(state.snapshot().await)
+}
+
+async fn tail_logs(logs: &Mutex<Vec<String>>) -> String {
+    let lines = logs.lock().await;
+    if lines.is_empty() {
+        return String::new();
+    }
+    let start = lines.len().saturating_sub(12);
+    format!("\n{}", lines[start..].join("\n"))
 }
 
 async fn wait_for_http(url: &str) -> Result<(), String> {
@@ -358,7 +408,7 @@ async fn update_dsh(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<B
     let data = app_data_dir(&app)?;
     let prefix = runtime_prefix(&data);
     let handle = app.clone();
-    let result = install_managed(&prefix, move |line| {
+    let result = install_managed(&prefix, &format!("{}@latest", dsh::DSH_PACKAGE), move |line| {
         let _ = handle.emit("dsh-update-progress", line);
     })
     .await;

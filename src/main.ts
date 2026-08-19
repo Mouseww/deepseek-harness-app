@@ -6,6 +6,7 @@ import { parseConfig, type DshDesktopConfig } from './config.ts'
 import {
   checkDshUpdates,
   getStatus,
+  onSpawnLog,
   onStatus,
   onUpdateProgress,
   openWeb,
@@ -188,6 +189,7 @@ void (async () => {
   render(status)
   await onStatus((next) => { render(next) })
   await onUpdateProgress(appendLog)
+  await onSpawnLog(appendLog)
   if (status.config.autoStart && status.state === 'idle') {
     try {
       render(await startBackend())

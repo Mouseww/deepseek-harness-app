@@ -17,7 +17,7 @@ At runtime the shell launches or updates that npm package. It does not contain t
 - **Settings:** persist host, port, auto-start, and launch mode.
 - **DSH updates:** `npm install @deepseek-ai/dsh@latest` in the app-data prefix. That does not rebuild this shell.
 
-Optional local checkout (not required, not a submodule): set `DSH_CHECKOUT` to a clone of `deepseek-ai/deepseek-harness`, or keep a sibling directory named `deepseek-harness`. The shell then uses `pnpm dsh web` from that tree.
+Optional local checkout (not required, not a submodule): set `DSH_CHECKOUT` to a clone of `deepseek-ai/deepseek-harness`. The shell then uses `pnpm dsh web` from that tree. Nearby folders named `deepseek-harness` are ignored so a source tree cannot stall first launch.
 
 `dsh web` refuses `--host 0.0.0.0`. A phone cannot reach a loopback-only desktop server without a tunnel.
 

@@ -101,3 +101,12 @@ export async function onStatus(handler: (status: BackendStatus) => void): Promis
 export async function onUpdateProgress(handler: (line: string) => void): Promise<UnlistenFn> {
   return listen<string>('dsh-update-progress', (event) => { handler(event.payload) })
 }
+
+/**
+ * Subscribe to local `dsh web` spawn stdout/stderr.
+ * @param handler - called with each line.
+ * @returns an unlisten function.
+ */
+export async function onSpawnLog(handler: (line: string) => void): Promise<UnlistenFn> {
+  return listen<string>('dsh-spawn-log', (event) => { handler(event.payload) })
+}

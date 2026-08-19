@@ -17,7 +17,7 @@
 - **设置：** 持久化 host、port、自动启动和启动模式。
 - **DSH 更新：** 在应用数据前缀中执行 `npm install @deepseek-ai/dsh@latest`。这不会重编本外壳。
 
-可选本地检出（不需要，也不是 submodule）：把 `DSH_CHECKOUT` 设为 `deepseek-ai/deepseek-harness` 的克隆，或在旁边放一个名为 `deepseek-harness` 的目录。外壳会在该树里跑 `pnpm dsh web`。
+可选本地检出（不需要，也不是 submodule）：把 `DSH_CHECKOUT` 设为 `deepseek-ai/deepseek-harness` 的克隆。外壳才会在该树里跑 `pnpm dsh web`。旁边同名目录会被忽略，避免源码树第一次编译把启动卡住。
 
 `dsh web` 拒绝 `--host 0.0.0.0`。手机无法在没有隧道的情况下访问仅回环的桌面服务器。
 

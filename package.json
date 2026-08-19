@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-app",
   "description": "Tauri 2 shell that launches or connects to official dsh web",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "private": true,
   "type": "module",
   "license": "MIT",
