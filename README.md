@@ -12,7 +12,7 @@ Packaged installers are out of the box: they ship official Node 22 plus that npm
 
 ## What it does
 
-- **Windows / macOS / Linux:** start the bundled `node` + `@deepseek-ai/dsh` `web` command, then navigate to the ready URL. Unpackaged `pnpm dev` can also use a system Node.
+- **Windows / macOS / Linux:** open straight into the official Web UI. The shell starts `dsh web` in the background and only shows settings on failure or from the tray. Unpackaged `pnpm dev` can also use a system Node.
 - **Android / iOS:** connect-only. Enter a reachable `dsh web` host and port.
 - **Settings:** persist host, port, auto-start, and launch mode.
 - **DSH updates:** `npm install @deepseek-ai/dsh@latest` in the app-data prefix. That does not rebuild this shell.

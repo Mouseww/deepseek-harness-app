@@ -5,69 +5,76 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>DeepSeek Harness</title>
     <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="icon" href="/app-icon.png" />
   </head>
   <body>
     <div class="shell">
-      <header class="mast">
+      <div class="splash" id="splash">
+        <img class="mark" src="/app-icon.png" width="96" height="96" alt="" />
         <p class="kicker">DeepSeek Harness</p>
-        <h1>Desktop shell</h1>
-        <p class="lede">Launch a local <code>dsh web</code> or point this window at an existing host. The official Web UI loads in this WebView; the shell only owns the process, the listen address, and DSH updates.</p>
-      </header>
-
-      <section class="status-card" aria-live="polite">
-        <div class="status-row">
-          <span class="lamp" id="lamp" data-state="idle"></span>
-          <div>
-            <p class="status-label" id="status-label">Idle</p>
-            <p class="status-detail" id="status-detail">Configure host and port, then start.</p>
+        <section class="status-card" aria-live="polite">
+          <div class="status-row">
+            <span class="lamp" id="lamp" data-state="starting"></span>
+            <div>
+              <p class="status-label" id="status-label">Starting</p>
+              <p class="status-detail" id="status-detail">Launching dsh web</p>
+            </div>
           </div>
-        </div>
-        <p class="url-line" id="url-line" hidden></p>
-      </section>
-
-      <form id="settings" class="panel">
-        <fieldset>
-          <legend>Reach DSH web</legend>
-          <label class="field">
-            <span>Mode</span>
-            <select id="launch-mode" name="launchMode">
-              <option value="local">Launch local dsh web</option>
-              <option value="connect">Connect to an existing host</option>
-            </select>
-          </label>
-          <div class="pair">
-            <label class="field">
-              <span>Host</span>
-              <input id="host" name="host" spellcheck="false" autocomplete="off" inputmode="url" />
-            </label>
-            <label class="field">
-              <span>Port</span>
-              <input id="port" name="port" spellcheck="false" inputmode="numeric" />
-            </label>
-          </div>
-          <label class="check">
-            <input id="auto-start" name="autoStart" type="checkbox" />
-            <span>Start automatically next launch</span>
-          </label>
-        </fieldset>
-
-        <div class="actions">
-          <button type="submit" id="save-start">Save &amp; start</button>
-          <button type="button" id="stop">Stop</button>
-          <button type="button" id="open-web" hidden>Open Web UI</button>
-        </div>
-      </form>
-
-      <section class="panel">
-        <h2>DSH core</h2>
-        <p class="meta" id="version-line">Installed — · Latest —</p>
+          <p class="url-line" id="url-line" hidden></p>
+        </section>
         <pre class="log" id="log" hidden></pre>
-        <div class="actions">
-          <button type="button" id="check-updates">Check updates</button>
-          <button type="button" id="update-dsh">Update DSH</button>
-        </div>
-        <p class="hint" id="local-hint">Local launch needs Node.js 22.19+ on PATH. Android and iOS are connect-only: run DSH on a desktop and enter that host and port here.</p>
-      </section>
+      </div>
+
+      <div id="settings-stack" hidden>
+        <header class="mast">
+          <p class="kicker">DeepSeek Harness</p>
+          <h1>Settings</h1>
+          <p class="lede">Change host, port, or update the bundled DSH package. The official Web UI loads in this window after start.</p>
+        </header>
+
+        <form id="settings" class="panel">
+          <fieldset>
+            <legend>Reach DSH web</legend>
+            <label class="field">
+              <span>Mode</span>
+              <select id="launch-mode" name="launchMode">
+                <option value="local">Launch local dsh web</option>
+                <option value="connect">Connect to an existing host</option>
+              </select>
+            </label>
+            <div class="pair">
+              <label class="field">
+                <span>Host</span>
+                <input id="host" name="host" spellcheck="false" autocomplete="off" inputmode="url" />
+              </label>
+              <label class="field">
+                <span>Port</span>
+                <input id="port" name="port" spellcheck="false" inputmode="numeric" />
+              </label>
+            </div>
+            <label class="check">
+              <input id="auto-start" name="autoStart" type="checkbox" />
+              <span>Start automatically next launch</span>
+            </label>
+          </fieldset>
+
+          <div class="actions">
+            <button type="submit" id="save-start">Save &amp; start</button>
+            <button type="button" id="stop">Stop</button>
+            <button type="button" id="open-web" hidden>Open Web UI</button>
+          </div>
+        </form>
+
+        <section class="panel">
+          <h2>DSH core</h2>
+          <p class="meta" id="version-line">Installed — · Latest —</p>
+          <div class="actions">
+            <button type="button" id="check-updates">Check updates</button>
+            <button type="button" id="update-dsh">Update DSH</button>
+          </div>
+          <p class="hint" id="local-hint">Packaged installers include Node and @deepseek-ai/dsh. Android and iOS are connect-only.</p>
+        </section>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

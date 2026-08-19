@@ -37,6 +37,26 @@ body {
   gap: 1.25rem;
 }
 
+.splash {
+  min-height: calc(100vh - 5rem);
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 1rem;
+  text-align: center;
+}
+
+.splash .status-card,
+.splash .log {
+  width: min(36rem, 100%);
+  text-align: left;
+}
+
+.mark {
+  display: block;
+  border-radius: 1.25rem;
+}
+
 .mast h1 {
   margin: 0.15rem 0 0.6rem;
   font-size: clamp(2rem, 6vw, 3.1rem);

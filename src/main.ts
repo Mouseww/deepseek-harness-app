@@ -34,6 +34,8 @@ const versionLine = requiredElement('version-line')
 const logEl = requiredElement('log')
 const localHint = requiredElement('local-hint')
 const saveStart = requiredElement('save-start') as HTMLButtonElement
+const settingsStack = requiredElement('settings-stack')
+const settingsRequested = new URLSearchParams(location.search).has('settings')
 
 const LABELS: Record<BackendStatus['state'], string> = {
   idle: 'Idle',
@@ -106,6 +108,7 @@ function render(status: BackendStatus): void {
       if (option.value === 'local') option.disabled = true
     }
   }
+  settingsStack.hidden = !(settingsRequested || status.state === 'error')
 }
 
 /**
@@ -190,11 +193,4 @@ void (async () => {
   await onStatus((next) => { render(next) })
   await onUpdateProgress(appendLog)
   await onSpawnLog(appendLog)
-  if (status.config.autoStart && status.state === 'idle') {
-    try {
-      render(await startBackend())
-    } catch (error) {
-      showError(error)
-    }
-  }
 })().catch(showError)

@@ -140,6 +140,12 @@ fn navigate(app: &AppHandle, url: &str) -> Result<(), String> {
     window.navigate(parsed).map_err(|error| error.to_string())
 }
 
+fn settings_page_url(base: &str) -> Result<String, String> {
+    let mut parsed = Url::parse(base).map_err(|error| error.to_string())?;
+    parsed.set_query(Some("settings=1"));
+    Ok(parsed.to_string())
+}
+
 fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     app.path()
         .app_data_dir()
@@ -180,17 +186,21 @@ async fn set_config(
     Ok(config)
 }
 
-#[tauri::command]
-async fn start_dsh(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<BackendStatus, String> {
+async fn start_inner(app: &AppHandle, state: &AppState) -> Result<BackendStatus, String> {
     let config = state.config.lock().await.clone();
     config.validate()?;
     if !can_launch_local() && config.launch_mode == LaunchMode::Local {
         return Err("this platform cannot spawn dsh web; switch to connect mode".into());
     }
     match config.launch_mode {
-        LaunchMode::Connect => connect_existing(&app, &state, config).await,
-        LaunchMode::Local => spawn_local(&app, &state, config).await,
+        LaunchMode::Connect => connect_existing(app, state, config).await,
+        LaunchMode::Local => spawn_local(app, state, config).await,
     }
+}
+
+#[tauri::command]
+async fn start_dsh(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<BackendStatus, String> {
+    start_inner(&app, &state).await
 }
 
 async fn connect_existing(
@@ -394,7 +404,7 @@ async fn open_settings(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     if url.is_empty() {
         return Err("shell URL is not available".into());
     }
-    navigate(&app, &url)
+    navigate(&app, &settings_page_url(&url)?)
 }
 
 #[tauri::command]
@@ -471,7 +481,9 @@ fn build_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     tauri::async_runtime::spawn(async move {
                         let url = state.shell_url.lock().await.clone();
                         if !url.is_empty() {
-                            let _ = navigate(&app, &url);
+                            if let Ok(settings) = settings_page_url(&url) {
+                                let _ = navigate(&app, &settings);
+                            }
                         }
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
@@ -520,7 +532,7 @@ pub fn run() {
     builder
         .setup(|app| {
             let config = load_config(app.handle());
-            let state = Arc::new(AppState::new(config));
+            let state = Arc::new(AppState::new(config.clone()));
             if let Ok(data) = app_data_dir(app.handle()) {
                 if let Some(version) = managed_version(&runtime_prefix(&data)) {
                     if let Ok(mut installed) = state.installed.try_lock() {
@@ -535,9 +547,23 @@ pub fn run() {
                     }
                 }
             }
-            app.manage(state);
+            app.manage(state.clone());
             if let Err(error) = build_tray(app.handle()) {
                 eprintln!("dsh-desktop: tray unavailable: {error}");
+            }
+            if config.auto_start {
+                if let Ok(mut slot) = state.state.try_lock() {
+                    *slot = StatusState::Starting;
+                }
+                if let Ok(mut slot) = state.message.try_lock() {
+                    *slot = Some("Starting dsh web".into());
+                }
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = start_inner(&handle, &state).await {
+                        set_state(&handle, &state, StatusState::Error, Some(error)).await;
+                    }
+                });
             }
             Ok(())
         })
