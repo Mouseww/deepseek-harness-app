@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
@@ -178,6 +181,103 @@ fn home_env(app_data: &Path) -> Vec<(String, String)> {
     vec![("DSH_HOME".into(), app_data.join("dsh-home").to_string_lossy().into_owned())]
 }
 
+/// `runtime/dsh` for `.../node_modules/@deepseek-ai/dsh/lib/bin.js`.
+fn npm_prefix_from_bin(bin: &Path) -> Option<PathBuf> {
+    Some(
+        bin.parent()?
+            .parent()?
+            .parent()?
+            .parent()?
+            .parent()?
+            .to_path_buf(),
+    )
+}
+
+fn find_resolve_hook(hints: &[PathBuf]) -> Option<PathBuf> {
+    for hint in hints {
+        for candidate in [
+            hint.join("hooks").join("resolve-register.mjs"),
+            hint.join("src-tauri").join("hooks").join("resolve-register.mjs"),
+        ] {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Best-effort ancestor so Node's parent-walk from `$DSH_HOME/profiles/web`
+/// can see the installation's `node_modules` even if profile healing lags.
+fn ensure_home_node_modules(home: &Path, prefix: &Path) {
+    let target = prefix.join("node_modules");
+    if !target.is_dir() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(home);
+    let link = home.join("node_modules");
+    if link.exists() || link.symlink_metadata().is_ok() {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_dir(&target, &link).is_ok() {
+            return;
+        }
+        let _ = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &link.to_string_lossy(),
+                &target.to_string_lossy(),
+            ])
+            .creation_flags(0x0800_0000)
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::os::unix::fs::symlink(&target, &link);
+    }
+}
+
+fn packaged_env(app_data: &Path, prefix: &Path) -> Vec<(String, String)> {
+    let home = app_data.join("dsh-home");
+    ensure_home_node_modules(&home, prefix);
+    let mut env = home_env(app_data);
+    env.push((
+        "DSH_DESKTOP_PREFIX".into(),
+        prefix.to_string_lossy().into_owned(),
+    ));
+    env.push((
+        "NODE_PATH".into(),
+        prefix.join("node_modules").to_string_lossy().into_owned(),
+    ));
+    env
+}
+
+fn path_to_file_url(path: &Path) -> String {
+    let raw = path.to_string_lossy().replace('\\', "/");
+    let encoded = raw.replace(' ', "%20");
+    if encoded.starts_with('/') {
+        format!("file://{encoded}")
+    } else {
+        format!("file:///{encoded}")
+    }
+}
+
+fn node_web_args(bin: &Path, hook: Option<&Path>, flags: [String; 4]) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(hook) = hook {
+        args.push("--import".into());
+        args.push(path_to_file_url(hook));
+    }
+    args.push(bin.to_string_lossy().into_owned());
+    args.push("web".into());
+    args.extend(flags);
+    args
+}
+
 /// True when there is no bundled runtime and the app-data prefix still needs npm.
 pub fn needs_managed_install(app_data: &Path, hints: &[PathBuf]) -> bool {
     std::env::var("DSH_DESKTOP_BIN").is_err()
@@ -194,25 +294,25 @@ pub fn resolve_launch(
 ) -> Result<LaunchPlan, String> {
     let flags = web_launch_args(&config.host, config.port);
     let home = app_data.join("dsh-home");
-    let env = home_env(app_data);
     if let Ok(explicit) = std::env::var("DSH_DESKTOP_BIN") {
-        let mut args = vec!["web".into()];
-        args.extend(flags);
         return Ok(LaunchPlan {
             program: PathBuf::from(explicit),
-            args,
+            args: {
+                let mut args = vec!["web".into()];
+                args.extend(flags);
+                args
+            },
             cwd: Some(home),
-            env,
+            env: home_env(app_data),
         });
     }
     if let Some((node, bin)) = find_bundled_runtime(hints) {
-        let mut args = vec![bin.to_string_lossy().into_owned(), "web".into()];
-        args.extend(flags);
+        let prefix = npm_prefix_from_bin(&bin).unwrap_or_else(|| bin.parent().unwrap_or(&bin).to_path_buf());
         return Ok(LaunchPlan {
             program: node,
-            args,
-            cwd: Some(home),
-            env,
+            args: node_web_args(&bin, find_resolve_hook(hints).as_deref(), flags),
+            cwd: Some(prefix.clone()),
+            env: packaged_env(app_data, &prefix),
         });
     }
     if let Some(root) = find_checkout(app_data) {
@@ -225,23 +325,22 @@ pub fn resolve_launch(
             program: pnpm,
             args,
             cwd: Some(root),
-            env,
+            env: home_env(app_data),
         });
     }
     let node = find_node().ok_or_else(|| {
         "This build has no bundled Node, and Node.js 22.19+ is not on PATH. Use a packaged installer or install Node."
             .to_string()
     })?;
-    let bin = managed_bin(&runtime_prefix(app_data)).ok_or_else(|| {
+    let prefix = runtime_prefix(app_data);
+    let bin = managed_bin(&prefix).ok_or_else(|| {
         format!("managed {DSH_PACKAGE} is not installed yet")
     })?;
-    let mut args = vec![bin.to_string_lossy().into_owned(), "web".into()];
-    args.extend(flags);
     Ok(LaunchPlan {
         program: node,
-        args,
-        cwd: Some(home),
-        env,
+        args: node_web_args(&bin, find_resolve_hook(hints).as_deref(), flags),
+        cwd: Some(prefix.clone()),
+        env: packaged_env(app_data, &prefix),
     })
 }
 
