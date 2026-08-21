@@ -81,6 +81,51 @@ pub fn parse_ready_line(line: &str) -> Option<String> {
     }
 }
 
+/// Wire-root client plugins that provide `connection` and `typert`.
+/// Without both, the rest of the web graph stays pending and the WebView
+/// shows "N entries did not activate".
+const BOOT_ROOT_CONNECTION: &str = "@deepseek-ai/dsh-client-connection";
+const BOOT_ROOT_TYPERT: &str = "@deepseek-ai/dsh-typert-registry";
+
+/// True when `index.html` injected `window.__DSH_BOOT__` includes the wire-root
+/// client plugins. The HTTP server binds before client-modules finishes scanning
+/// those rows, so a TCP probe is not enough to navigate.
+pub fn boot_manifest_ready(html: &str) -> bool {
+    const MARKER: &str = "window.__DSH_BOOT__ = ";
+    let Some(start) = html.find(MARKER) else {
+        return false;
+    };
+    let rest = &html[start + MARKER.len()..];
+    let end = rest
+        .find("</script>")
+        .or_else(|| rest.find("<\\/script>"))
+        .unwrap_or(rest.len());
+    let json = rest[..end].trim().trim_end_matches(';');
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return false;
+    };
+    let Some(entries) = value.get("entries").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    let mut has_connection = false;
+    let mut has_typert = false;
+    for entry in entries {
+        let Some(id) = entry.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if id == BOOT_ROOT_CONNECTION {
+            has_connection = true;
+        }
+        if id == BOOT_ROOT_TYPERT {
+            has_typert = true;
+        }
+        if has_connection && has_typert {
+            return true;
+        }
+    }
+    false
+}
+
 /// --host / --port suffix after the launcher tokens.
 pub fn web_launch_args(host: &str, port: u16) -> [String; 4] {
     [
@@ -131,5 +176,20 @@ mod tests {
             Some("http://127.0.0.1:4567")
         );
         assert!(parse_ready_line("waiting").is_none());
+    }
+
+    #[test]
+    fn boot_manifest_requires_connection_and_typert() {
+        let incomplete = r#"<head><script>window.__DSH_BOOT__ = {"rev":"x","entries":[{"id":"@deepseek-ai/dsh-client-modules"}]}</script></head>"#;
+        assert!(!boot_manifest_ready(incomplete));
+        assert!(!boot_manifest_ready("<html></html>"));
+        let complete = r#"<head><script>window.__DSH_BOOT__ = {"rev":"x","entries":[{"id":"@deepseek-ai/dsh-client-connection"},{"id":"@deepseek-ai/dsh-typert-registry"}]}</script></head>"#;
+        assert!(boot_manifest_ready(complete));
+        let only_connection = r#"<head><script>window.__DSH_BOOT__ = {"rev":"x","entries":[{"id":"@deepseek-ai/dsh-client-connection"}]}</script></head>"#;
+        assert!(!boot_manifest_ready(only_connection));
+        let with_headers = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n{complete}"
+        );
+        assert!(boot_manifest_ready(&with_headers));
     }
 }

@@ -12,7 +12,7 @@ use tauri_plugin_store::StoreExt;
 use tokio::sync::Mutex;
 use url::Url;
 
-use config::{parse_ready_line, DshConfig, LaunchMode};
+use config::{boot_manifest_ready, parse_ready_line, DshConfig, LaunchMode};
 use dsh::{
     can_launch_local, install_managed, launch_command_line, managed_version, needs_managed_install,
     registry_version, resolve_launch, runtime_prefix, scan_lines, spawn_plan, take_pipes,
@@ -294,11 +294,12 @@ async fn spawn_local(
         .await;
     });
 
+    // The listen socket is up ~1s before `__DSH_BOOT__` includes connection/typert.
+    // Navigating on TCP (or the ready line, which is close) loads a partial graph
+    // and the WebView sticks on "N entries did not activate".
     let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    let mut waiting_for_graph = false;
     let url = loop {
-        if let Some(url) = found.lock().await.clone() {
-            break url;
-        }
         if let Some(process) = state.process.lock().await.as_mut() {
             if let Ok(Some(status)) = process.try_wait() {
                 scan_out.abort();
@@ -309,10 +310,25 @@ async fn spawn_local(
                 return Err(message);
             }
         }
-        if config.port != 0 {
-            let candidate = config.web_url()?;
-            if probe_http(&candidate).await {
-                break candidate;
+        let candidate = found.lock().await.clone().or_else(|| {
+            if config.port == 0 {
+                None
+            } else {
+                config.web_url().ok()
+            }
+        });
+        if let Some(candidate) = candidate {
+            if let Some(html) = fetch_index(&candidate).await {
+                if boot_manifest_ready(&html) {
+                    break candidate;
+                }
+                if !waiting_for_graph {
+                    waiting_for_graph = true;
+                    let _ = app.emit(
+                        "dsh-spawn-log",
+                        "waiting for web boot graph (connection + typert)".to_string(),
+                    );
+                }
             }
         }
         if tokio::time::Instant::now() >= deadline {
@@ -327,7 +343,7 @@ async fn spawn_local(
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
     *state.url.lock().await = Some(url.clone());
-    set_state(app, state, StatusState::Ready, Some("dsh web is listening".into())).await;
+    set_state(app, state, StatusState::Ready, Some("dsh web UI is ready".into())).await;
     let _ = navigate(app, &url);
     Ok(state.snapshot().await)
 }
@@ -344,32 +360,46 @@ async fn tail_logs(logs: &Mutex<Vec<String>>) -> String {
 async fn wait_for_http(url: &str) -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
-        if probe_http(url).await {
+        if boot_ui_ready(url).await {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err(format!("no HTTP server at {url}"));
+            return Err(format!("no ready dsh web UI at {url}"));
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
-async fn probe_http(url: &str) -> bool {
-    let Ok(url) = Url::parse(url) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let port = url.port_or_known_default().unwrap_or(80);
-    tokio::time::timeout(
+/// GET `/` and require `__DSH_BOOT__` to include connection + typert.
+/// The listen socket is up before client-modules finishes that scan.
+async fn boot_ui_ready(url: &str) -> bool {
+    fetch_index(url)
+        .await
+        .is_some_and(|html| boot_manifest_ready(&html))
+}
+
+async fn fetch_index(url: &str) -> Option<String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_string();
+    let port = parsed.port_or_known_default()?;
+    let mut stream = tokio::time::timeout(
         Duration::from_millis(400),
-        tokio::net::TcpStream::connect((host, port)),
+        tokio::net::TcpStream::connect((host.as_str(), port)),
     )
     .await
-    .ok()
-    .and_then(Result::ok)
-    .is_some()
+    .ok()?
+    .ok()?;
+    let request = format!(
+        "GET / HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\nAccept: text/html\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.ok()?;
+    let mut buf = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut buf))
+        .await
+        .ok()?
+        .ok()?;
+    String::from_utf8(buf).ok()
 }
 
 async fn stop_inner(state: &AppState) -> Result<(), String> {
