@@ -51,7 +51,7 @@ body::before {
   z-index: 40;
   height: var(--tb-h);
   display: grid;
-  grid-template-columns: 78px 1fr 78px;
+  grid-template-columns: 78px 1fr auto;
   align-items: center;
   color: var(--tb-fg);
   background: color-mix(in oklab, var(--tb-bg) 78%, transparent);
@@ -144,6 +144,27 @@ body.chrome-light.window-inactive button.tl { background: #dedede; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+button.update-chip,
+button.update-chip[type='button'] {
+  margin-right: 10px;
+  height: 22px;
+  min-width: 0;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  border: 0;
+  background: var(--accent);
+  color: #14200c;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+button.update-chip[data-busy='1'] {
+  opacity: 0.8;
 }
 
 .shell {

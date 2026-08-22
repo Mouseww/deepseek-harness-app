@@ -22,6 +22,7 @@
         <img class="chrome-mark" src="/app-icon.png" width="22" height="22" alt="" draggable="false" />
         <span class="chrome-title">DeepSeek Harness</span>
       </div>
+      <button type="button" class="update-chip" id="update-chip" hidden>Update</button>
     </header>
 
     <div class="shell">
@@ -93,6 +94,16 @@
             <button type="button" id="open-web" hidden>Open Web UI</button>
           </div>
         </form>
+
+        <section class="panel">
+          <h2>Desktop app</h2>
+          <p class="meta" id="app-version-line">This app — · Latest —</p>
+          <div class="actions">
+            <button type="button" id="check-app-update">Check for updates</button>
+            <button type="button" id="install-app-update" hidden>Download &amp; install</button>
+          </div>
+          <p class="hint" id="app-update-hint">Startup checks GitHub Releases and can download the matching installer so you do not have to fetch it by hand.</p>
+        </section>
 
         <section class="panel">
           <h2>DSH core</h2>

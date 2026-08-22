@@ -117,3 +117,33 @@ export async function onSpawnLog(handler: (line: string) => void): Promise<Unlis
 export async function onOpenSettings(handler: () => void): Promise<UnlistenFn> {
   return listen('dsh-open-settings', () => { handler() })
 }
+
+export type AppUpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'error'
+
+export interface AppUpdateStatus {
+  state: AppUpdateState
+  current: string
+  latest?: string
+  notesUrl?: string
+  assetName?: string
+  bytesDownloaded: number
+  bytesTotal?: number
+  message?: string
+  available: boolean
+}
+
+export async function getAppUpdate(): Promise<AppUpdateStatus> {
+  return invoke<AppUpdateStatus>('get_app_update')
+}
+
+export async function checkAppUpdate(): Promise<AppUpdateStatus> {
+  return invoke<AppUpdateStatus>('check_app_update')
+}
+
+export async function installAppUpdate(): Promise<AppUpdateStatus> {
+  return invoke<AppUpdateStatus>('install_app_update')
+}
+
+export async function onAppUpdate(handler: (status: AppUpdateStatus) => void): Promise<UnlistenFn> {
+  return listen<AppUpdateStatus>('dsh-app-update', (event) => { handler(event.payload) })
+}

@@ -1,5 +1,6 @@
 //! Tauri application: persist settings, spawn or connect to dsh web, and update DSH.
 
+mod app_update;
 mod config;
 mod dsh;
 
@@ -12,6 +13,7 @@ use tauri_plugin_store::StoreExt;
 use tokio::sync::Mutex;
 use url::Url;
 
+use app_update::{AppUpdateState as UpdatePhase, AppUpdateStatus};
 use config::{boot_manifest_ready, parse_ready_line, DshConfig, LaunchMode};
 use dsh::{
     can_launch_local, install_managed, launch_command_line, managed_version, needs_managed_install,
@@ -639,6 +641,113 @@ fn report_theme(app: AppHandle, bg: String, fg: String) {
     let _ = app.emit("dsh-theme", ThemePayload { bg, fg });
 }
 
+type UpdateSlot = Arc<Mutex<AppUpdateStatus>>;
+
+async fn publish_app_update(app: &AppHandle, status: &AppUpdateStatus) {
+    let _ = app.emit("dsh-app-update", status);
+}
+
+async fn refresh_app_update(
+    app: &AppHandle,
+    slot: &Mutex<AppUpdateStatus>,
+    fail_loud: bool,
+) -> Result<AppUpdateStatus, String> {
+    {
+        let mut status = slot.lock().await;
+        status.state = UpdatePhase::Checking;
+        status.message = Some("Checking GitHub releases".into());
+        publish_app_update(app, &status).await;
+    }
+    match app_update::fetch_latest(std::env::consts::OS, std::env::consts::ARCH).await {
+        Ok(next) => {
+            *slot.lock().await = next.clone();
+            publish_app_update(app, &next).await;
+            Ok(next)
+        }
+        Err(error) => {
+            let mut status = slot.lock().await;
+            status.state = UpdatePhase::Error;
+            status.message = Some(error.clone());
+            let snapshot = status.clone();
+            publish_app_update(app, &snapshot).await;
+            if fail_loud {
+                Err(error)
+            } else {
+                Ok(snapshot)
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn get_app_update(update: State<'_, UpdateSlot>) -> Result<AppUpdateStatus, String> {
+    Ok(update.lock().await.clone())
+}
+
+#[tauri::command]
+async fn check_app_update(
+    app: AppHandle,
+    update: State<'_, UpdateSlot>,
+) -> Result<AppUpdateStatus, String> {
+    refresh_app_update(&app, &update, true).await
+}
+
+#[tauri::command]
+async fn install_app_update(
+    app: AppHandle,
+    update: State<'_, UpdateSlot>,
+) -> Result<AppUpdateStatus, String> {
+    {
+        let mut status = update.lock().await;
+        if matches!(status.state, UpdatePhase::Downloading | UpdatePhase::Installing) {
+            return Ok(status.clone());
+        }
+        status.state = UpdatePhase::Downloading;
+        status.bytes_downloaded = 0;
+        status.message = Some("Downloading installer".into());
+        publish_app_update(&app, &status).await;
+    }
+    let handle = app.clone();
+    let slot = update.inner().clone();
+    let result = app_update::download_installer(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        move |done, total| {
+            if let Ok(mut status) = slot.try_lock() {
+                status.state = UpdatePhase::Downloading;
+                status.bytes_downloaded = done;
+                status.bytes_total = total;
+                let _ = handle.emit("dsh-app-update", status.clone());
+            }
+        },
+    )
+    .await;
+    match result {
+        Ok((path, next)) => {
+            *update.lock().await = next.clone();
+            publish_app_update(&app, &next).await;
+            app_update::launch_installer(&path)?;
+            #[cfg(windows)]
+            {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(800)).await;
+                    handle.exit(0);
+                });
+            }
+            Ok(next)
+        }
+        Err(error) => {
+            let mut status = update.lock().await;
+            status.state = UpdatePhase::Error;
+            status.message = Some(error.clone());
+            let snapshot = status.clone();
+            publish_app_update(&app, &snapshot).await;
+            Err(error)
+        }
+    }
+}
+
 #[tauri::command]
 async fn check_dsh_updates(
     app: AppHandle,
@@ -697,11 +806,14 @@ fn build_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItemBuilder::with_id("show", "Show").build(app)?;
     let settings = MenuItemBuilder::with_id("settings", "Settings").build(app)?;
     let reload = MenuItemBuilder::with_id("open-web", "Open Web UI").build(app)?;
+    let check_update = MenuItemBuilder::with_id("check-update", "Check for updates").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
     let menu = MenuBuilder::new(app)
         .item(&show)
         .item(&settings)
         .item(&reload)
+        .separator()
+        .item(&check_update)
         .separator()
         .item(&quit)
         .build()?;
@@ -746,6 +858,21 @@ fn build_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         reveal_main(&app);
                     });
                 }
+            }
+            "check-update" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(slot) = app.try_state::<UpdateSlot>() {
+                        match refresh_app_update(&app, &slot, false).await {
+                            Ok(status) if status.available => {
+                                hide_dsh_ui(&app);
+                                let _ = app.emit("dsh-open-settings", ());
+                                reveal_main(&app);
+                            }
+                            _ => reveal_main(&app),
+                        }
+                    }
+                });
             }
             "quit" => app.exit(0),
             _ => {}
@@ -793,8 +920,17 @@ pub fn run() {
                 inject_no_context_menu(&window);
             }
             app.manage(state.clone());
+            let updates: UpdateSlot = Arc::new(Mutex::new(AppUpdateStatus::current_only()));
+            app.manage(updates.clone());
             if let Err(error) = build_tray(app.handle()) {
                 eprintln!("dsh-desktop: tray unavailable: {error}");
+            }
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    let _ = refresh_app_update(&handle, &updates, false).await;
+                });
             }
             if config.auto_start {
                 if let Ok(mut slot) = state.state.try_lock() {
@@ -820,6 +956,9 @@ pub fn run() {
             open_web,
             open_settings,
             report_theme,
+            get_app_update,
+            check_app_update,
+            install_app_update,
             check_dsh_updates,
             update_dsh,
         ])

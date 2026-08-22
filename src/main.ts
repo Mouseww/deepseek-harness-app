@@ -6,8 +6,12 @@
 import { attachChrome } from './chrome.ts'
 import { parseConfig, type DshDesktopConfig } from './config.ts'
 import {
+  checkAppUpdate,
   checkDshUpdates,
+  getAppUpdate,
   getStatus,
+  installAppUpdate,
+  onAppUpdate,
   onOpenSettings,
   onSpawnLog,
   onStatus,
@@ -17,6 +21,7 @@ import {
   startBackend,
   stopBackend,
   updateDsh,
+  type AppUpdateStatus,
   type BackendStatus,
 } from './tauri-api.ts'
 
@@ -40,6 +45,11 @@ const saveStart = requiredElement('save-start') as HTMLButtonElement
 const settingsStack = requiredElement('settings-stack')
 const bootRail = requiredElement('boot-rail')
 const splash = requiredElement('splash')
+const updateChip = requiredElement('update-chip') as HTMLButtonElement
+const appVersionLine = requiredElement('app-version-line')
+const checkAppButton = requiredElement('check-app-update') as HTMLButtonElement
+const installAppButton = requiredElement('install-app-update') as HTMLButtonElement
+const appUpdateHint = requiredElement('app-update-hint')
 const settingsRequested = new URLSearchParams(location.search).has('settings')
 let forceSettings = settingsRequested
 
@@ -170,6 +180,37 @@ function defaultMessage(status: BackendStatus): string {
 }
 
 /**
+ * Paint desktop-app update chrome from a GitHub release snapshot.
+ */
+function paintAppUpdate(status: AppUpdateStatus): void {
+  const latest = status.latest ?? '—'
+  appVersionLine.textContent = `This app ${status.current} · Latest ${latest}`
+  appUpdateHint.textContent = status.message ?? 'Startup checks GitHub Releases and can download the matching installer so you do not have to fetch it by hand.'
+  const busy = status.state === 'checking' || status.state === 'downloading' || status.state === 'installing'
+  checkAppButton.disabled = busy
+  installAppButton.hidden = !status.available && status.state !== 'downloading' && status.state !== 'installing'
+  installAppButton.disabled = busy
+  if (status.state === 'downloading') {
+    const total = status.bytesTotal
+    const pct = total && total > 0 ? Math.round((status.bytesDownloaded / total) * 100) : 0
+    installAppButton.textContent = total ? `Downloading ${pct}%` : 'Downloading…'
+    updateChip.hidden = false
+    updateChip.dataset['busy'] = '1'
+    updateChip.textContent = total ? `${pct}%` : '…'
+  } else if (status.available) {
+    installAppButton.textContent = `Download & install ${status.latest ?? ''}`.trim()
+    updateChip.hidden = false
+    updateChip.dataset['busy'] = '0'
+    updateChip.textContent = `Update ${status.latest ?? ''}`.trim()
+  } else {
+    installAppButton.textContent = 'Download & install'
+    updateChip.hidden = true
+    updateChip.dataset['busy'] = '0'
+    updateChip.textContent = 'Update'
+  }
+}
+
+/**
  * Append one updater line to the log panel.
  * @param line - a stdout/stderr line.
  */
@@ -224,6 +265,20 @@ updateButton.addEventListener('click', () => {
   void updateDsh().then(render).catch(showError)
 })
 
+checkAppButton.addEventListener('click', () => {
+  void checkAppUpdate().then(paintAppUpdate).catch(showError)
+})
+
+installAppButton.addEventListener('click', () => {
+  void installAppUpdate().then(paintAppUpdate).catch(showError)
+})
+
+updateChip.addEventListener('click', (event) => {
+  event.stopPropagation()
+  if (updateChip.dataset['busy'] === '1') return
+  void installAppUpdate().then(paintAppUpdate).catch(showError)
+})
+
 void (async () => {
   try {
     await attachChrome()
@@ -241,4 +296,10 @@ void (async () => {
   await onStatus((next) => { render(next) })
   await onUpdateProgress(appendLog)
   await onSpawnLog(appendLog)
+  await onAppUpdate(paintAppUpdate)
+  try {
+    paintAppUpdate(await getAppUpdate())
+  } catch {
+    // GitHub check is optional on first paint.
+  }
 })().catch(showError)
