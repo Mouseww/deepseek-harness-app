@@ -113,6 +113,8 @@ jobs:
         run: pnpm icons
 
       - name: Bundle Node and DSH
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
         run: pnpm bundle:runtime
 
       - name: Build installers

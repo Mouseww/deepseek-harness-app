@@ -31,8 +31,22 @@ function target() {
   throw new Error('bundle-runtime: unsupported ' + platform + '-' + arch)
 }
 
-function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, stdio: 'inherit', shell: false, windowsHide: true })
+function installEnv() {
+  const env = {
+    ...process.env,
+    npm_config_progress: 'false',
+    npm_config_audit: 'false',
+    npm_config_fund: 'false',
+  }
+  const options = env.NODE_OPTIONS ?? ''
+  if (!/(^|\s)--max-old-space-size=/.test(options)) {
+    env.NODE_OPTIONS = [options, '--max-old-space-size=4096'].filter(Boolean).join(' ')
+  }
+  return env
+}
+
+function run(command, args, cwd, env = process.env) {
+  const result = spawnSync(command, args, { cwd, env, stdio: 'inherit', shell: false, windowsHide: true })
   if (result.error) throw new Error(command + ' spawn failed: ' + result.error.message)
   if (result.status !== 0) {
     throw new Error(command + ' failed (status=' + result.status + ' signal=' + result.signal + ')')
@@ -108,19 +122,23 @@ cpSync(extractedNode, nodeBin)
 if (process.platform !== 'win32') chmodSync(nodeBin, 0o755)
 
 const npmCli = findNpmCli(extractedRoot)
-console.log('bundle-runtime: ' + nodeBin + ' ' + npmCli + ' install ' + dshSpec)
+// Install with the Node running this script. The extracted runtime binary is
+// what the app ships; using it for npm on 7GB macOS runners OOMs arborist.
+console.log('bundle-runtime: ' + process.execPath + ' ' + npmCli + ' install ' + dshSpec)
 mkdirSync(dshDir, { recursive: true })
 writeFileSync(join(dshDir, 'package.json'), JSON.stringify({ private: true, name: 'dsh-runtime' }, null, 2) + '\n')
-run(nodeBin, [
+run(process.execPath, [
   npmCli,
   'install',
   dshSpec,
   '--omit=dev',
   '--no-fund',
   '--no-audit',
+  '--progress=false',
+  '--loglevel=error',
   '--prefix',
   dshDir,
-], dshDir)
+], dshDir, installEnv())
 
 if (!existsSync(dshBin)) throw new Error('npm install did not produce ' + dshBin)
 writeFileSync(manifestPath, JSON.stringify(wanted, null, 2) + '\n')
