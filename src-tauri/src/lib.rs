@@ -506,9 +506,17 @@ async fn spawn_local(
         if let Some(candidate) = candidate {
             if let Some(html) = fetch_index(&candidate).await {
                 if boot_manifest_ready(&html) {
-                    break candidate;
-                }
-                if !waiting_for_graph {
+                    if agent_preset_api_ready(&candidate).await {
+                        break candidate;
+                    }
+                    if !waiting_for_graph {
+                        waiting_for_graph = true;
+                        let _ = app.emit(
+                            "dsh-spawn-log",
+                            "waiting for Agent preset API".to_string(),
+                        );
+                    }
+                } else if !waiting_for_graph {
                     waiting_for_graph = true;
                     let _ = app.emit(
                         "dsh-spawn-log",
@@ -557,12 +565,53 @@ async fn wait_for_http(url: &str) -> Result<(), String> {
     }
 }
 
-/// GET `/` and require `__DSH_BOOT__` to include connection + typert.
-/// The listen socket is up before client-modules finishes that scan.
+/// Require both the client boot roots and the Agent preset RPC.
+/// The manifest can become complete shortly before the fetch API is callable;
+/// navigating during that gap leaves the preset picker stuck on `Failed to fetch`.
 async fn boot_ui_ready(url: &str) -> bool {
-    fetch_index(url)
+    let manifest_ready = fetch_index(url)
         .await
-        .is_some_and(|html| boot_manifest_ready(&html))
+        .is_some_and(|html| boot_manifest_ready(&html));
+    manifest_ready && agent_preset_api_ready(url).await
+}
+
+async fn agent_preset_api_ready(url: &str) -> bool {
+    let Ok(endpoint) = Url::parse(url).and_then(|base| base.join("/api/agentPreset.list")) else {
+        return false;
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    else {
+        return false;
+    };
+    let body = serde_json::json!({
+        "type": "client-request",
+        "rpcId": "dsh-desktop-readiness",
+        "method": "agentPreset.list",
+        "payload": {},
+    });
+    let Ok(response) = client.post(endpoint).json(&body).send().await else {
+        return false;
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    response
+        .json::<serde_json::Value>()
+        .await
+        .is_ok_and(|value| agent_preset_response_ready(&value))
+}
+
+fn agent_preset_response_ready(value: &serde_json::Value) -> bool {
+    value
+        .get("result")
+        .and_then(|result| result.get("ok"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && value
+            .pointer("/result/value/presets")
+            .is_some_and(serde_json::Value::is_array)
 }
 
 async fn fetch_index(url: &str) -> Option<String> {
@@ -995,4 +1044,32 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running dsh-desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::agent_preset_response_ready;
+
+    #[test]
+    fn preset_readiness_requires_successful_roster() {
+        let ready = serde_json::json!({
+            "type": "server-response",
+            "rpcId": "dsh-desktop-readiness",
+            "result": {
+                "ok": true,
+                "value": { "presets": [] }
+            }
+        });
+        assert!(agent_preset_response_ready(&ready));
+
+        let business_error = serde_json::json!({
+            "result": { "ok": false, "error": { "message": "not ready" } }
+        });
+        assert!(!agent_preset_response_ready(&business_error));
+
+        let incomplete = serde_json::json!({
+            "result": { "ok": true, "value": {} }
+        });
+        assert!(!agent_preset_response_ready(&incomplete));
+    }
 }

@@ -177,7 +177,7 @@ jobs:
           fi
           printf 'publishing %s\n' "$tag"
           printf '  %s\n' "${files[@]}"
-          notes='Installers (not the GitHub source zip): Windows NSIS/MSI, macOS DMG, Linux deb. DSH core is the official @deepseek-ai/dsh package from https://github.com/deepseek-ai/deepseek-harness.'
+          notes='Fixes Agent preset loading during desktop startup by waiting for the preset API before opening the WebView. Installers (not the GitHub source zip): Windows NSIS/MSI, macOS DMG, Linux deb. DSH core is the official @deepseek-ai/dsh package from https://github.com/deepseek-ai/deepseek-harness.'
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "${files[@]}" --clobber
             gh release edit "$tag" --title "DSH Desktop $tag" --notes "$notes" --latest
