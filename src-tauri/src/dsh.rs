@@ -287,16 +287,40 @@ fn path_to_file_url(path: &Path) -> String {
     }
 }
 
-fn node_web_args(bin: &Path, hook: Option<&Path>, flags: [String; 4]) -> Vec<String> {
+fn node_cli_args(bin: &Path, hook: Option<&Path>, cli: &[String]) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(hook) = hook {
         args.push("--import".into());
         args.push(path_to_file_url(hook));
     }
     args.push(bin.to_string_lossy().into_owned());
-    args.push("web".into());
-    args.extend(flags);
+    args.extend(cli.iter().cloned());
     args
+}
+
+/// First-launch plugins installed into the official `web` profile.
+pub const STARTER_PLUGINS: &[(&str, &str)] = &[
+    ("dsh-web-ui", "github:zhu1090093659/dsh-web-ui"),
+    ("Transparent UI", "github:WYH66666666/DSH-Transparent-UI-Plugin"),
+    ("better-sidebar", "github:omdsh-dev/DSH-better-sidebar"),
+    ("dsh-visualize", "github:Nagi-ovo/dsh-visualize"),
+];
+
+/// `dsh plugin --profile web add <spec>`
+pub fn plugin_add_args(spec: &str) -> Vec<String> {
+    vec![
+        "plugin".into(),
+        "--profile".into(),
+        "web".into(),
+        "add".into(),
+        spec.to_string(),
+    ]
+}
+
+/// True when an already-present plugin should not fail first launch.
+pub fn plugin_already_present(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("already") || error.contains("exists") || error.contains("duplicate")
 }
 
 /// True when there is no bundled runtime and the app-data prefix still needs npm.
@@ -307,22 +331,17 @@ pub fn needs_managed_install(app_data: &Path, hints: &[PathBuf]) -> bool {
         && managed_bin(&runtime_prefix(app_data)).is_none()
 }
 
-/// Choose bundled runtime, DSH_DESKTOP_BIN, an explicit checkout, or managed `node` + bin.js.
-pub fn resolve_launch(
+/// Resolve node/pnpm/dsh for an arbitrary CLI after the launcher token.
+pub fn resolve_cli(
     app_data: &Path,
     hints: &[PathBuf],
-    config: &DshConfig,
+    cli: &[String],
 ) -> Result<LaunchPlan, String> {
-    let flags = web_launch_args(&config.host, config.port);
     let home = app_data.join("dsh-home");
     if let Ok(explicit) = std::env::var("DSH_DESKTOP_BIN") {
         return Ok(LaunchPlan {
             program: PathBuf::from(explicit),
-            args: {
-                let mut args = vec!["web".into()];
-                args.extend(flags);
-                args
-            },
+            args: cli.to_vec(),
             cwd: Some(home),
             env: home_env(app_data),
         });
@@ -331,7 +350,7 @@ pub fn resolve_launch(
         let prefix = npm_prefix_from_bin(&bin).unwrap_or_else(|| bin.parent().unwrap_or(&bin).to_path_buf());
         return Ok(LaunchPlan {
             program: node,
-            args: node_web_args(&bin, find_resolve_hook(hints).as_deref(), flags),
+            args: node_cli_args(&bin, find_resolve_hook(hints).as_deref(), cli),
             cwd: Some(prefix.clone()),
             env: packaged_env(app_data, &prefix),
         });
@@ -340,8 +359,8 @@ pub fn resolve_launch(
         let pnpm = which("pnpm.cmd")
             .or_else(|| which("pnpm"))
             .ok_or_else(|| "pnpm not found on PATH for DSH_CHECKOUT".to_string())?;
-        let mut args = vec!["dsh".into(), "web".into()];
-        args.extend(flags);
+        let mut args = vec!["dsh".into()];
+        args.extend(cli.iter().cloned());
         return Ok(LaunchPlan {
             program: pnpm,
             args,
@@ -359,10 +378,21 @@ pub fn resolve_launch(
     })?;
     Ok(LaunchPlan {
         program: node,
-        args: node_web_args(&bin, find_resolve_hook(hints).as_deref(), flags),
+        args: node_cli_args(&bin, find_resolve_hook(hints).as_deref(), cli),
         cwd: Some(prefix.clone()),
         env: packaged_env(app_data, &prefix),
     })
+}
+
+/// Choose bundled runtime, DSH_DESKTOP_BIN, an explicit checkout, or managed `node` + bin.js.
+pub fn resolve_launch(
+    app_data: &Path,
+    hints: &[PathBuf],
+    config: &DshConfig,
+) -> Result<LaunchPlan, String> {
+    let mut cli = vec!["web".into()];
+    cli.extend(web_launch_args(&config.host, config.port));
+    resolve_cli(app_data, hints, &cli)
 }
 
 /// Human-readable command line for the settings log.
@@ -417,6 +447,46 @@ pub fn spawn_plan(plan: &LaunchPlan) -> Result<Child, String> {
     }
     cmd.spawn()
         .map_err(|error| format!("spawn {}: {error}", plan.program.display()))
+}
+
+/// Run a one-shot CLI (plugin add, etc.) to completion, streaming lines.
+pub async fn run_plan<F>(plan: &LaunchPlan, on_line: F) -> Result<(), String>
+where
+    F: Fn(String) + Send + Sync + 'static,
+{
+    let mut child = spawn_plan(plan)?;
+    let on_line = std::sync::Arc::new(std::sync::Mutex::new(on_line));
+    let mut tasks = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        let callback = on_line.clone();
+        tasks.push(tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(emit) = callback.lock() {
+                    emit(line);
+                }
+            }
+        }));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        let callback = on_line.clone();
+        tasks.push(tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(emit) = callback.lock() {
+                    emit(line);
+                }
+            }
+        }));
+    }
+    let status = child.wait().await.map_err(|error| error.to_string())?;
+    for task in tasks {
+        let _ = task.await;
+    }
+    if !status.success() {
+        return Err(format!("command failed with {status}"));
+    }
+    Ok(())
 }
 
 /// Wrap a spawned child so callers can stop it later.
@@ -522,5 +592,40 @@ mod tests {
         assert_eq!(find_checkout(&tmp.join("apps").join("desktop")), None);
         assert!(bundled_runtime(&tmp).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn plugin_add_args_match_official_cli() {
+        assert_eq!(
+            plugin_add_args("github:zhu1090093659/dsh-web-ui"),
+            vec![
+                "plugin",
+                "--profile",
+                "web",
+                "add",
+                "github:zhu1090093659/dsh-web-ui"
+            ]
+        );
+    }
+
+    #[test]
+    fn starter_plugins_are_the_four_web_profile_defaults() {
+        let specs: Vec<&str> = STARTER_PLUGINS.iter().map(|(_, spec)| *spec).collect();
+        assert_eq!(
+            specs,
+            vec![
+                "github:zhu1090093659/dsh-web-ui",
+                "github:WYH66666666/DSH-Transparent-UI-Plugin",
+                "github:omdsh-dev/DSH-better-sidebar",
+                "github:Nagi-ovo/dsh-visualize",
+            ]
+        );
+    }
+
+    #[test]
+    fn duplicate_plugin_errors_are_benign() {
+        assert!(plugin_already_present("Plugin already installed"));
+        assert!(plugin_already_present("entry exists in profile"));
+        assert!(!plugin_already_present("network timeout"));
     }
 }

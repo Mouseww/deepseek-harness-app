@@ -110,3 +110,10 @@ export async function onUpdateProgress(handler: (line: string) => void): Promise
 export async function onSpawnLog(handler: (line: string) => void): Promise<UnlistenFn> {
   return listen<string>('dsh-spawn-log', (event) => { handler(event.payload) })
 }
+
+/**
+ * Subscribe to the tray/settings request that keeps the shell page in place.
+ */
+export async function onOpenSettings(handler: () => void): Promise<UnlistenFn> {
+  return listen('dsh-open-settings', () => { handler() })
+}

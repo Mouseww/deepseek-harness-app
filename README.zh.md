@@ -12,7 +12,8 @@
 
 ## 功能
 
-- **Windows / macOS / Linux：** 打开即进入官方 Web UI。外壳在后台启动 `dsh web`，只有失败或从托盘进入时才显示设置页。未打包的 `pnpm dev` 也可以用系统 Node。
+- **Windows / macOS / Linux：** 打开即进入官方 Web UI。外壳在后台启动 `dsh web`，只有失败或从托盘进入时才显示设置页。点关闭会隐藏到托盘，从托盘选退出才真正退出。未打包的 `pnpm dev` 也可以用系统 Node。
+- **第一次初始化：** 在 Web UI 起来之前，向 `web` 配置安装四个插件（`dsh-web-ui`、Transparent UI、better-sidebar、`dsh-visualize`）。
 - **Android / iOS：** 仅连接。填写可访问的 `dsh web` host 与 port。
 - **设置：** 持久化 host、port、自动启动和启动模式。
 - **DSH 更新：** 在应用数据前缀中执行 `npm install @deepseek-ai/dsh@latest`。这不会重编本外壳。

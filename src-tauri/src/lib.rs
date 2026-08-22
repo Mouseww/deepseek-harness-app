@@ -15,12 +15,16 @@ use url::Url;
 use config::{boot_manifest_ready, parse_ready_line, DshConfig, LaunchMode};
 use dsh::{
     can_launch_local, install_managed, launch_command_line, managed_version, needs_managed_install,
-    registry_version, resolve_launch, runtime_prefix, scan_lines, spawn_plan, take_pipes,
-    wrap_child, DshProcess,
+    plugin_add_args, plugin_already_present, registry_version, resolve_cli, resolve_launch,
+    run_plan, runtime_prefix, scan_lines, spawn_plan, take_pipes, wrap_child, DshProcess,
+    STARTER_PLUGINS,
 };
 
 const STORE_FILE: &str = "desktop.json";
 const STORE_KEY: &str = "config";
+const PLUGINS_KEY: &str = "starterPlugins";
+const DSH_WEBVIEW: &str = "dsh";
+const TITLEBAR_LOGICAL: f64 = 40.0;
 
 /// Live backend snapshot published to the settings page.
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +122,164 @@ fn save_config(app: &AppHandle, config: &DshConfig) -> Result<(), String> {
     store.save().map_err(|error| error.to_string())
 }
 
+fn load_starter_plugins(app: &AppHandle) -> Vec<String> {
+    let Ok(store) = app.store(STORE_FILE) else {
+        return Vec::new();
+    };
+    match store.get(PLUGINS_KEY) {
+        Some(value) => serde_json::from_value(value).unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
+fn save_starter_plugins(app: &AppHandle, specs: &[String]) -> Result<(), String> {
+    let store = app.store(STORE_FILE).map_err(|error| error.to_string())?;
+    store.set(
+        PLUGINS_KEY,
+        serde_json::to_value(specs).map_err(|error| error.to_string())?,
+    );
+    store.save().map_err(|error| error.to_string())
+}
+
+#[derive(Clone, Serialize)]
+struct ThemePayload {
+    bg: String,
+    fg: String,
+}
+
+fn reveal_main(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn layout_dsh_webview(
+    size: tauri::PhysicalSize<u32>,
+    scale: f64,
+    webview: &tauri::Webview,
+) -> Result<(), String> {
+    let top = (TITLEBAR_LOGICAL * scale).round() as u32;
+    let height = size.height.saturating_sub(top).max(1);
+    webview
+        .set_position(tauri::PhysicalPosition::new(0, top))
+        .map_err(|error| error.to_string())?;
+    webview
+        .set_size(tauri::PhysicalSize::new(size.width, height))
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn hide_dsh_ui(app: &AppHandle) {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if let Some(webview) = app.get_webview(DSH_WEBVIEW) {
+            let _ = webview.hide();
+        }
+    }
+}
+
+fn show_dsh_ui(app: &AppHandle, url: &str) -> Result<(), String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        return navigate(app, url);
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let parsed = Url::parse(url).map_err(|error| error.to_string())?;
+        let window = app
+            .get_window("main")
+            .ok_or_else(|| "main window missing".to_string())?;
+        let scale = window.scale_factor().map_err(|error| error.to_string())?;
+        let size = window.inner_size().map_err(|error| error.to_string())?;
+        if let Some(existing) = app.get_webview(DSH_WEBVIEW) {
+            existing.navigate(parsed).map_err(|error| error.to_string())?;
+            layout_dsh_webview(size, scale, &existing)?;
+            existing.show().map_err(|error| error.to_string())?;
+            let _ = existing.set_focus();
+            let _ = existing.eval(include_str!("disable_context_menu.js"));
+            return Ok(());
+        }
+        let logical_w = f64::from(size.width) / scale;
+        let logical_h = f64::from(size.height) / scale;
+        let builder = tauri::webview::WebviewBuilder::new(
+            DSH_WEBVIEW,
+            tauri::WebviewUrl::External(parsed),
+        )
+        .initialization_script(include_str!("disable_context_menu.js"))
+        .initialization_script(include_str!("theme_bridge.js"));
+        match window.add_child(
+            builder,
+            tauri::LogicalPosition::new(0.0, TITLEBAR_LOGICAL),
+            tauri::LogicalSize::new(logical_w, (logical_h - TITLEBAR_LOGICAL).max(1.0)),
+        ) {
+            Ok(webview) => {
+                let _ = webview.set_focus();
+                let _ = webview.eval(include_str!("disable_context_menu.js"));
+                Ok(())
+            }
+            Err(error) => {
+                eprintln!("dsh-desktop: child webview unavailable: {error}");
+                navigate(app, url)
+            }
+        }
+    }
+}
+
+async fn install_starter_plugins(
+    app: &AppHandle,
+    state: &AppState,
+    data: &std::path::Path,
+    hints: &[std::path::PathBuf],
+) -> Result<(), String> {
+    let mut done = load_starter_plugins(app);
+    let total = STARTER_PLUGINS.len();
+    for (index, (name, spec)) in STARTER_PLUGINS.iter().enumerate() {
+        if done.iter().any(|installed| installed == spec) {
+            continue;
+        }
+        let n = index + 1;
+        set_state(
+            app,
+            state,
+            StatusState::Installing,
+            Some(format!("Installing plugin {n}/{total}: {name}")),
+        )
+        .await;
+        let _ = app.emit(
+            "dsh-spawn-log",
+            format!("$ dsh plugin --profile web add {spec}"),
+        );
+        let plan = resolve_cli(data, hints, &plugin_add_args(spec))?;
+        let handle = app.clone();
+        let result = tokio::time::timeout(
+            Duration::from_secs(180),
+            run_plan(&plan, move |line| {
+                let _ = handle.emit("dsh-spawn-log", line);
+            }),
+        )
+        .await;
+        match result {
+            Ok(Ok(())) => {
+                done.push((*spec).to_string());
+                let _ = save_starter_plugins(app, &done);
+            }
+            Ok(Err(error)) => {
+                let _ = app.emit("dsh-spawn-log", format!("plugin {name}: {error}"));
+                if plugin_already_present(&error) {
+                    done.push((*spec).to_string());
+                    let _ = save_starter_plugins(app, &done);
+                }
+            }
+            Err(_) => {
+                let _ = app.emit("dsh-spawn-log", format!("plugin {name}: timed out"));
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn publish(app: &AppHandle, state: &AppState) {
     let snapshot = state.snapshot().await;
     let _ = app.emit("dsh-status", snapshot);
@@ -134,12 +296,29 @@ fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         .ok_or_else(|| "main window missing".to_string())
 }
 
+const NO_CONTEXT_MENU_JS: &str = include_str!("disable_context_menu.js");
+
+fn inject_no_context_menu(window: &WebviewWindow) {
+    let _ = window.eval(NO_CONTEXT_MENU_JS);
+    let win = window.clone();
+    tauri::async_runtime::spawn(async move {
+        for delay in [80_u64, 200, 500, 1200] {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            let _ = win.eval(NO_CONTEXT_MENU_JS);
+        }
+    });
+}
+
+#[allow(dead_code)]
 fn navigate(app: &AppHandle, url: &str) -> Result<(), String> {
     let window = main_window(app)?;
     let parsed = Url::parse(url).map_err(|error| error.to_string())?;
-    window.navigate(parsed).map_err(|error| error.to_string())
+    window.navigate(parsed).map_err(|error| error.to_string())?;
+    inject_no_context_menu(&window);
+    Ok(())
 }
 
+#[allow(dead_code)]
 fn settings_page_url(base: &str) -> Result<String, String> {
     let mut parsed = Url::parse(base).map_err(|error| error.to_string())?;
     parsed.set_query(Some("settings=1"));
@@ -213,7 +392,7 @@ async fn connect_existing(
     wait_for_http(&url).await?;
     *state.url.lock().await = Some(url.clone());
     set_state(app, state, StatusState::Ready, Some("Connected".into())).await;
-    let _ = navigate(app, &url);
+    let _ = show_dsh_ui(app, &url);
     Ok(state.snapshot().await)
 }
 
@@ -222,6 +401,7 @@ async fn spawn_local(
     state: &AppState,
     config: DshConfig,
 ) -> Result<BackendStatus, String> {
+    hide_dsh_ui(app);
     stop_inner(state).await?;
     let data = app_data_dir(app)?;
     let hints = runtime_hints(app);
@@ -244,6 +424,9 @@ async fn spawn_local(
             return Err(error);
         }
         *state.installed.lock().await = managed_version(&runtime_prefix(&data));
+    }
+    if let Err(error) = install_starter_plugins(app, state, &data, &hints).await {
+        let _ = app.emit("dsh-spawn-log", format!("starter plugins: {error}"));
     }
     set_state(app, state, StatusState::Starting, Some("Spawning dsh web".into())).await;
     let plan = resolve_launch(&data, &hints, &config)?;
@@ -306,6 +489,7 @@ async fn spawn_local(
                 scan_err.abort();
                 let tail = tail_logs(&logs).await;
                 let message = format!("dsh web exited ({status}) before it was ready.{tail}");
+                hide_dsh_ui(app);
                 set_state(app, state, StatusState::Error, Some(message.clone())).await;
                 return Err(message);
             }
@@ -337,6 +521,7 @@ async fn spawn_local(
             stop_inner(state).await?;
             let tail = tail_logs(&logs).await;
             let message = format!("dsh web did not become ready within 90s.{tail}");
+            hide_dsh_ui(app);
             set_state(app, state, StatusState::Error, Some(message.clone())).await;
             return Err(message);
         }
@@ -344,7 +529,7 @@ async fn spawn_local(
     };
     *state.url.lock().await = Some(url.clone());
     set_state(app, state, StatusState::Ready, Some("dsh web UI is ready".into())).await;
-    let _ = navigate(app, &url);
+    let _ = show_dsh_ui(app, &url);
     Ok(state.snapshot().await)
 }
 
@@ -412,6 +597,7 @@ async fn stop_inner(state: &AppState) -> Result<(), String> {
 
 #[tauri::command]
 async fn stop_dsh(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<BackendStatus, String> {
+    hide_dsh_ui(&app);
     stop_inner(&state).await?;
     set_state(&app, &state, StatusState::Idle, Some("Stopped".into())).await;
     Ok(state.snapshot().await)
@@ -425,16 +611,32 @@ async fn open_web(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(),
         .await
         .clone()
         .ok_or_else(|| "dsh web is not ready".to_string())?;
-    navigate(&app, &url)
+    show_dsh_ui(&app, &url)
 }
 
 #[tauri::command]
 async fn open_settings(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    let url = state.shell_url.lock().await.clone();
-    if url.is_empty() {
-        return Err("shell URL is not available".into());
+    hide_dsh_ui(&app);
+    let _ = app.emit("dsh-open-settings", ());
+    reveal_main(&app);
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let url = state.shell_url.lock().await.clone();
+        if url.is_empty() {
+            return Err("shell URL is not available".into());
+        }
+        navigate(&app, &settings_page_url(&url)?)?;
     }
-    navigate(&app, &settings_page_url(&url)?)
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _ = state;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn report_theme(app: AppHandle, bg: String, fg: String) {
+    let _ = app.emit("dsh-theme", ThemePayload { bg, fg });
 }
 
 #[tauri::command]
@@ -490,37 +692,48 @@ async fn update_dsh(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<B
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn build_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder};
-    use tauri::tray::TrayIconBuilder;
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
+    let show = MenuItemBuilder::with_id("show", "Show").build(app)?;
     let settings = MenuItemBuilder::with_id("settings", "Settings").build(app)?;
     let reload = MenuItemBuilder::with_id("open-web", "Open Web UI").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
     let menu = MenuBuilder::new(app)
+        .item(&show)
         .item(&settings)
         .item(&reload)
         .separator()
         .item(&quit)
         .build()?;
-    let _tray = TrayIconBuilder::new()
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or("missing default window icon for tray")?;
+    let _tray = TrayIconBuilder::with_id("main")
+        .icon(icon)
+        .tooltip("DeepSeek Harness")
         .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            }
+            | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } = event
+            {
+                reveal_main(tray.app_handle());
+            }
+        })
         .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => reveal_main(app),
             "settings" => {
-                if let Some(state) = app.try_state::<Arc<AppState>>() {
-                    let state = state.inner().clone();
-                    let app = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let url = state.shell_url.lock().await.clone();
-                        if !url.is_empty() {
-                            if let Ok(settings) = settings_page_url(&url) {
-                                let _ = navigate(&app, &settings);
-                            }
-                        }
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    });
-                }
+                hide_dsh_ui(app);
+                let _ = app.emit("dsh-open-settings", ());
+                reveal_main(app);
             }
             "open-web" => {
                 if let Some(state) = app.try_state::<Arc<AppState>>() {
@@ -528,8 +741,9 @@ fn build_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
                         if let Some(url) = state.url.lock().await.clone() {
-                            let _ = navigate(&app, &url);
+                            let _ = show_dsh_ui(&app, &url);
                         }
+                        reveal_main(&app);
                     });
                 }
             }
@@ -576,6 +790,7 @@ pub fn run() {
                         *slot = url.to_string();
                     }
                 }
+                inject_no_context_menu(&window);
             }
             app.manage(state.clone());
             if let Err(error) = build_tray(app.handle()) {
@@ -604,16 +819,39 @@ pub fn run() {
             stop_dsh,
             open_web,
             open_settings,
+            report_theme,
             check_dsh_updates,
             update_dsh,
         ])
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                if let Some(state) = window.app_handle().try_state::<Arc<AppState>>() {
-                    tauri::async_runtime::block_on(async {
-                        let _ = stop_inner(&state).await;
-                    });
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
+                tauri::WindowEvent::Resized(_) => {
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    {
+                        if let Some(webview) = window.app_handle().get_webview(DSH_WEBVIEW) {
+                            if let (Ok(size), Ok(scale)) =
+                                (window.inner_size(), window.scale_factor())
+                            {
+                                let _ = layout_dsh_webview(size, scale, &webview);
+                            }
+                        }
+                    }
+                }
+                tauri::WindowEvent::Destroyed => {
+                    if let Some(state) = window.app_handle().try_state::<Arc<AppState>>() {
+                        tauri::async_runtime::block_on(async {
+                            let _ = stop_inner(&state).await;
+                        });
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

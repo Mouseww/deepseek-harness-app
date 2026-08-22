@@ -6,12 +6,40 @@
     <title>DeepSeek Harness</title>
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="icon" href="/app-icon.png" />
+    <script>
+      window.addEventListener('contextmenu', (event) => event.preventDefault(), true);
+      window.addEventListener('auxclick', (event) => { if (event.button === 2) event.preventDefault(); }, true);
+    </script>
   </head>
   <body>
+    <header class="chrome" id="chrome">
+      <div class="traffic" role="group" aria-label="Window">
+        <button type="button" class="tl close" id="win-close" aria-label="Close" title="Close"></button>
+        <button type="button" class="tl min" id="win-min" aria-label="Minimize" title="Minimize"></button>
+        <button type="button" class="tl zoom" id="win-zoom" aria-label="Maximize" title="Maximize"></button>
+      </div>
+      <div class="chrome-drag" data-tauri-drag-region>
+        <img class="chrome-mark" src="/app-icon.png" width="22" height="22" alt="" draggable="false" />
+        <span class="chrome-title">DeepSeek Harness</span>
+      </div>
+    </header>
+
     <div class="shell">
       <div class="splash" id="splash">
-        <img class="mark" src="/app-icon.png" width="96" height="96" alt="" />
+        <div class="orb" aria-hidden="true">
+          <span class="ring ring-a"></span>
+          <span class="ring ring-b"></span>
+          <span class="glow"></span>
+          <img class="mark" src="/app-icon.png" width="176" height="176" alt="" />
+        </div>
         <p class="kicker">DeepSeek Harness</p>
+        <h1 class="wordmark">Lighting the workbench</h1>
+        <ol class="boot-rail" id="boot-rail">
+          <li data-step="runtime">Runtime</li>
+          <li data-step="plugins">Starter plugins</li>
+          <li data-step="web">Web UI</li>
+          <li data-step="ready">Ready</li>
+        </ol>
         <section class="status-card" aria-live="polite">
           <div class="status-row">
             <span class="lamp" id="lamp" data-state="starting"></span>
@@ -20,6 +48,7 @@
               <p class="status-detail" id="status-detail">Launching dsh web</p>
             </div>
           </div>
+          <div class="pulse-track" aria-hidden="true"><span class="pulse-bar"></span></div>
           <p class="url-line" id="url-line" hidden></p>
         </section>
         <pre class="log" id="log" hidden></pre>

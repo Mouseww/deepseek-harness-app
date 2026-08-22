@@ -1,11 +1,14 @@
 /**
  * Settings page: persist host/port, start or connect to dsh web, and update DSH.
- * After the backend reports ready the window navigates to the official Web UI.
+ * After the backend reports ready a child webview loads the official Web UI
+ * under the macOS-style titlebar.
  */
+import { attachChrome } from './chrome.ts'
 import { parseConfig, type DshDesktopConfig } from './config.ts'
 import {
   checkDshUpdates,
   getStatus,
+  onOpenSettings,
   onSpawnLog,
   onStatus,
   onUpdateProgress,
@@ -35,7 +38,10 @@ const logEl = requiredElement('log')
 const localHint = requiredElement('local-hint')
 const saveStart = requiredElement('save-start') as HTMLButtonElement
 const settingsStack = requiredElement('settings-stack')
+const bootRail = requiredElement('boot-rail')
+const splash = requiredElement('splash')
 const settingsRequested = new URLSearchParams(location.search).has('settings')
+let forceSettings = settingsRequested
 
 const LABELS: Record<BackendStatus['state'], string> = {
   idle: 'Idle',
@@ -108,7 +114,37 @@ function render(status: BackendStatus): void {
       if (option.value === 'local') option.disabled = true
     }
   }
-  settingsStack.hidden = !(settingsRequested || status.state === 'error')
+  const showSettings = forceSettings || status.state === 'error'
+  settingsStack.hidden = !showSettings
+  splash.hidden = showSettings && status.state === 'ready'
+  paintBootRail(status)
+}
+
+/**
+ * Highlight the current first-launch stage on the splash rail.
+ */
+function paintBootRail(status: BackendStatus): void {
+  const step = bootStep(status)
+  const order = ['runtime', 'plugins', 'web', 'ready']
+  const active = order.indexOf(step)
+  for (const node of bootRail.querySelectorAll('li')) {
+    const key = node.getAttribute('data-step') ?? ''
+    const index = order.indexOf(key)
+    node.setAttribute('data-active', index === active ? '1' : '0')
+    node.setAttribute('data-done', index >= 0 && index < active ? '1' : '0')
+  }
+}
+
+/**
+ * Map backend state onto a named boot stage.
+ */
+function bootStep(status: BackendStatus): string {
+  if (status.state === 'ready') return 'ready'
+  if (status.state === 'error' || status.state === 'idle') return 'runtime'
+  if (status.state === 'starting') return 'web'
+  const message = (status.message ?? '').toLowerCase()
+  if (message.includes('plugin')) return 'plugins'
+  return 'runtime'
 }
 
 /**
@@ -172,6 +208,8 @@ stopButton.addEventListener('click', () => {
 })
 
 openButton.addEventListener('click', () => {
+  forceSettings = false
+  settingsStack.hidden = true
   void openWeb().catch(showError)
 })
 
@@ -187,6 +225,16 @@ updateButton.addEventListener('click', () => {
 })
 
 void (async () => {
+  try {
+    await attachChrome()
+  } catch {
+    document.body.classList.add('browser')
+  }
+  await onOpenSettings(() => {
+    forceSettings = true
+    settingsStack.hidden = false
+    splash.hidden = true
+  })
   const status = await getStatus()
   writeForm(status.config)
   render(status)
