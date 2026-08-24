@@ -569,10 +569,46 @@ async fn wait_for_http(url: &str) -> Result<(), String> {
 /// The manifest can become complete shortly before the fetch API is callable;
 /// navigating during that gap leaves the preset picker stuck on `Failed to fetch`.
 async fn boot_ui_ready(url: &str) -> bool {
+    // The login gate intentionally denies the boot manifest and Host RPC until
+    // the WebView owns an authenticated same-origin session. Its public status
+    // endpoint is therefore also a valid, ready web entrypoint. Navigating to
+    // the root lets the gate redirect an unauthenticated WebView to /login.
+    if auth_gate_ready(url).await {
+        return true;
+    }
+
     let manifest_ready = fetch_index(url)
         .await
         .is_some_and(|html| boot_manifest_ready(&html));
     manifest_ready && agent_preset_api_ready(url).await
+}
+
+fn auth_status_response_ready(status: reqwest::StatusCode, value: &serde_json::Value) -> bool {
+    status.is_success()
+        && matches!(
+            value.get("mode").and_then(serde_json::Value::as_str),
+            Some("setup" | "login")
+        )
+}
+
+async fn auth_gate_ready(url: &str) -> bool {
+    let Ok(endpoint) = Url::parse(url).and_then(|base| base.join("/auth/status")) else {
+        return false;
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    else {
+        return false;
+    };
+    let Ok(response) = client.get(endpoint).send().await else {
+        return false;
+    };
+    let status = response.status();
+    let Ok(value) = response.json::<serde_json::Value>().await else {
+        return false;
+    };
+    auth_status_response_ready(status, &value)
 }
 
 async fn agent_preset_api_ready(url: &str) -> bool {
@@ -1048,7 +1084,29 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::agent_preset_response_ready;
+    use reqwest::StatusCode;
+
+    use super::{agent_preset_response_ready, auth_status_response_ready};
+
+    #[test]
+    fn authentication_gate_is_a_ready_web_entrypoint() {
+        assert!(auth_status_response_ready(
+            StatusCode::OK,
+            &serde_json::json!({ "mode": "login" }),
+        ));
+        assert!(auth_status_response_ready(
+            StatusCode::OK,
+            &serde_json::json!({ "mode": "setup" }),
+        ));
+        assert!(!auth_status_response_ready(
+            StatusCode::NOT_FOUND,
+            &serde_json::json!({ "mode": "login" }),
+        ));
+        assert!(!auth_status_response_ready(
+            StatusCode::OK,
+            &serde_json::json!({ "mode": "unknown" }),
+        ));
+    }
 
     #[test]
     fn preset_readiness_requires_successful_roster() {
