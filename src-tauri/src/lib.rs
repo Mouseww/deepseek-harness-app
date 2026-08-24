@@ -201,6 +201,7 @@ fn show_dsh_ui(app: &AppHandle, url: &str) -> Result<(), String> {
             existing.show().map_err(|error| error.to_string())?;
             let _ = existing.set_focus();
             let _ = existing.eval(include_str!("disable_context_menu.js"));
+            let _ = existing.eval(include_str!("auth_bridge.js"));
             return Ok(());
         }
         let logical_w = f64::from(size.width) / scale;
@@ -210,7 +211,8 @@ fn show_dsh_ui(app: &AppHandle, url: &str) -> Result<(), String> {
             tauri::WebviewUrl::External(parsed),
         )
         .initialization_script(include_str!("disable_context_menu.js"))
-        .initialization_script(include_str!("theme_bridge.js"));
+        .initialization_script(include_str!("theme_bridge.js"))
+        .initialization_script(include_str!("auth_bridge.js"));
         match window.add_child(
             builder,
             tauri::LogicalPosition::new(0.0, TITLEBAR_LOGICAL),
@@ -219,6 +221,7 @@ fn show_dsh_ui(app: &AppHandle, url: &str) -> Result<(), String> {
             Ok(webview) => {
                 let _ = webview.set_focus();
                 let _ = webview.eval(include_str!("disable_context_menu.js"));
+                let _ = webview.eval(include_str!("auth_bridge.js"));
                 Ok(())
             }
             Err(error) => {
