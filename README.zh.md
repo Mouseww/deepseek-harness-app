@@ -13,7 +13,7 @@
 ## 功能
 
 - **Windows / macOS / Linux：** 打开即进入官方 Web UI。外壳在后台启动 `dsh web`，只有失败或从托盘进入时才显示设置页。点关闭会隐藏到托盘，从托盘选退出才真正退出。未打包的 `pnpm dev` 也可以用系统 Node。
-- **第一次初始化：** 在 Web UI 起来之前，向 `web` 配置安装四个插件（`dsh-web-ui`、Transparent UI、better-sidebar、`dsh-visualize`）。
+- **第一次初始化：** 在 Web UI 起来之前，向 `web` 配置安装四个插件（`dsh-web-ui`、Transparent UI、better-sidebar、`dsh-visualize`）。Node 解析钩子会先从 profile 的 `node_modules` 找这些包，再回退到捆绑运行时。若某个 starter 插件写进了启动 bundles 但磁盘上没有对应包，外壳会先删掉这条 bundle，避免 `dsh web` 因 plugin tree 加载失败而起不来。
 - **应用更新：** 启动几秒后检查 GitHub Releases。有新安装包时，标题栏按钮或「设置 → Desktop app」可直接下载并运行，不必再手动去网页下。
 - **Android / iOS：** 仅连接。填写可访问的 `dsh web` host 与 port。
 - **设置：** 持久化 host、port、自动启动和启动模式。

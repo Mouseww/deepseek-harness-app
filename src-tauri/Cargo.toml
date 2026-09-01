@@ -1,6 +1,6 @@
 [package]
 name = "dsh-desktop"
-version = "1.5.4"
+version = "1.5.5"
 description = "Tauri 2 shell for DeepSeek Harness web"
 authors = ["DeepSeek AI"]
 edition = "2021"

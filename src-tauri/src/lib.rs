@@ -17,8 +17,9 @@ use app_update::{AppUpdateState as UpdatePhase, AppUpdateStatus};
 use config::{boot_manifest_ready, parse_ready_line, DshConfig, LaunchMode};
 use dsh::{
     can_launch_local, install_managed, launch_command_line, managed_version, needs_managed_install,
-    plugin_add_args, plugin_already_present, registry_version, resolve_cli, resolve_launch,
-    run_plan, runtime_prefix, scan_lines, spawn_plan, take_pipes, wrap_child, DshProcess,
+    plugin_add_args, plugin_already_present, plugin_installed_on_disk,
+    prune_missing_profile_bundles, registry_version, resolve_cli, resolve_launch, run_plan,
+    runtime_prefix, scan_lines, spawn_plan, take_pipes, wrap_child, DshProcess, STARTER_PLUGIN_PACKAGES,
     STARTER_PLUGINS,
 };
 
@@ -241,7 +242,9 @@ async fn install_starter_plugins(
     let mut done = load_starter_plugins(app);
     let total = STARTER_PLUGINS.len();
     for (index, (name, spec)) in STARTER_PLUGINS.iter().enumerate() {
-        if done.iter().any(|installed| installed == spec) {
+        let package = STARTER_PLUGIN_PACKAGES.get(index).copied().unwrap_or("");
+        if done.iter().any(|installed| installed == spec) && plugin_installed_on_disk(data, package)
+        {
             continue;
         }
         let n = index + 1;
@@ -432,6 +435,19 @@ async fn spawn_local(
     }
     if let Err(error) = install_starter_plugins(app, state, &data, &hints).await {
         let _ = app.emit("dsh-spawn-log", format!("starter plugins: {error}"));
+    }
+    match prune_missing_profile_bundles(&data) {
+        Ok(removed) => {
+            for name in removed {
+                let _ = app.emit(
+                    "dsh-spawn-log",
+                    format!("removed missing profile bundle {name} so dsh web can boot"),
+                );
+            }
+        }
+        Err(error) => {
+            let _ = app.emit("dsh-spawn-log", format!("prune profile bundles: {error}"));
+        }
     }
     set_state(app, state, StatusState::Starting, Some("Spawning dsh web".into())).await;
     let plan = resolve_launch(&data, &hints, &config)?;

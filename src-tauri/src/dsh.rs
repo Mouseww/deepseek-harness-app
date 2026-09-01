@@ -306,6 +306,16 @@ pub const STARTER_PLUGINS: &[(&str, &str)] = &[
     ("dsh-visualize", "github:Nagi-ovo/dsh-visualize"),
 ];
 
+/// npm package names that `dsh plugin add` writes into the profile.
+/// GitHub specs install as these names, then the loader imports them as
+/// bundles from the profile `package.json`.
+pub const STARTER_PLUGIN_PACKAGES: &[&str] = &[
+    "dsh-web-ui",
+    "@deepseek-ai/dsh-client-ui-aqua",
+    "dsh-better-sidebar",
+    "@dsh-external/dsh-visualize",
+];
+
 /// `dsh plugin --profile web add <spec>`
 pub fn plugin_add_args(spec: &str) -> Vec<String> {
     vec![
@@ -321,6 +331,76 @@ pub fn plugin_add_args(spec: &str) -> Vec<String> {
 pub fn plugin_already_present(error: &str) -> bool {
     let error = error.to_ascii_lowercase();
     error.contains("already") || error.contains("exists") || error.contains("duplicate")
+}
+
+fn profile_package_path(app_data: &Path) -> PathBuf {
+    app_data
+        .join("dsh-home")
+        .join("profiles")
+        .join("web")
+        .join("package.json")
+}
+
+/// True when the named npm package exists under the official `web` profile.
+pub fn plugin_installed_on_disk(app_data: &Path, package: &str) -> bool {
+    let root = app_data
+        .join("dsh-home")
+        .join("profiles")
+        .join("web")
+        .join("node_modules");
+    if let Some(rest) = package.strip_prefix('@') {
+        if let Some((scope, name)) = rest.split_once('/') {
+            return root
+                .join(format!("@{scope}"))
+                .join(name)
+                .join("package.json")
+                .is_file();
+        }
+    }
+    root.join(package).join("package.json").is_file()
+}
+
+/// Drop profile bundles whose packages are not actually present on disk.
+/// Official dsh treats a missing bundle as a fatal plugin-tree failure.
+pub fn prune_missing_profile_bundles(app_data: &Path) -> Result<Vec<String>, String> {
+    let path = profile_package_path(app_data);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    let Some(bundles) = value
+        .pointer_mut("/dsh/profile/bundles")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(Vec::new());
+    };
+    let mut removed = Vec::new();
+    bundles.retain(|entry| {
+        let Some(name) = entry.as_str() else {
+            return true;
+        };
+        if name.starts_with("@deepseek-ai/") {
+            return true;
+        }
+        if STARTER_PLUGIN_PACKAGES.contains(&name) && !plugin_installed_on_disk(app_data, name) {
+            removed.push(name.to_string());
+            return false;
+        }
+        true
+    });
+    if removed.is_empty() {
+        return Ok(removed);
+    }
+    if let Some(map) = value.get_mut("dependencies").and_then(|deps| deps.as_object_mut()) {
+        for name in &removed {
+            map.remove(name);
+        }
+    }
+    let pretty = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    std::fs::write(&path, pretty + "\n").map_err(|error| error.to_string())?;
+    Ok(removed)
 }
 
 /// True when there is no bundled runtime and the app-data prefix still needs npm.
@@ -627,5 +707,110 @@ mod tests {
         assert!(plugin_already_present("Plugin already installed"));
         assert!(plugin_already_present("entry exists in profile"));
         assert!(!plugin_already_present("network timeout"));
+    }
+
+    #[test]
+    fn prune_missing_profile_bundles_drops_absent_starter_plugins() {
+        let tmp = std::env::temp_dir().join(format!(
+            "dsh-desktop-prune-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let profile = tmp.join("dsh-home").join("profiles").join("web");
+        std::fs::create_dir_all(profile.join("node_modules").join("dsh-web-ui")).unwrap();
+        std::fs::write(
+            profile.join("node_modules").join("dsh-web-ui").join("package.json"),
+            "{\"name\":\"dsh-web-ui\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            profile.join("package.json"),
+            r#"{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {
+    "dsh-web-ui": "github:zhu1090093659/dsh-web-ui",
+    "dsh-better-sidebar": "github:omdsh-dev/DSH-better-sidebar",
+    "@dsh-external/dsh-visualize": "github:Nagi-ovo/dsh-visualize"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-better-sidebar",
+        "@dsh-external/dsh-visualize"
+      ]
+    }
+  }
+}
+"#,
+        )
+        .unwrap();
+        let removed = prune_missing_profile_bundles(&tmp).unwrap();
+        assert_eq!(
+            removed,
+            vec![
+                "dsh-better-sidebar".to_string(),
+                "@dsh-external/dsh-visualize".to_string()
+            ]
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(profile.join("package.json")).unwrap())
+                .unwrap();
+        let bundles = value
+            .pointer("/dsh/profile/bundles")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        let names: Vec<&str> = bundles.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"]
+        );
+        assert!(value
+            .pointer("/dependencies/dsh-better-sidebar")
+            .is_none());
+        assert!(value
+            .pointer("/dependencies/@dsh-external/dsh-visualize")
+            .is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn plugin_installed_on_disk_checks_scoped_and_bare_packages() {
+        let tmp = std::env::temp_dir().join(format!(
+            "dsh-desktop-installed-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = tmp
+            .join("dsh-home")
+            .join("profiles")
+            .join("web")
+            .join("node_modules");
+        std::fs::create_dir_all(root.join("@dsh-external").join("dsh-visualize")).unwrap();
+        std::fs::write(
+            root.join("@dsh-external")
+                .join("dsh-visualize")
+                .join("package.json"),
+            "{}\n",
+        )
+        .unwrap();
+        assert!(plugin_installed_on_disk(&tmp, "@dsh-external/dsh-visualize"));
+        assert!(!plugin_installed_on_disk(&tmp, "dsh-better-sidebar"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn starter_plugin_package_names_align_with_specs() {
+        assert_eq!(STARTER_PLUGINS.len(), STARTER_PLUGIN_PACKAGES.len());
+        assert_eq!(STARTER_PLUGIN_PACKAGES[2], "dsh-better-sidebar");
+        assert_eq!(STARTER_PLUGIN_PACKAGES[3], "@dsh-external/dsh-visualize");
     }
 }
